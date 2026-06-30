@@ -81,19 +81,16 @@ internal sealed class PgsqlExecutor : DapperExecutor
                 continue;
             }
 
-            var (npgsqlType, toWrite) = NpgsqlTypeOf(value);
-            if (npgsqlType is { } t)
-                writer.Write(toWrite, t);
-            else
-                writer.Write(toWrite); // unlisted CLR type: let Npgsql infer NpgsqlDbType.
+            var (npgsqlType, toWrite) = NpgsqlTypeOf(column, value);
+            writer.Write(toWrite, npgsqlType);
         }
     }
 
     /// <summary>
     /// Maps a non-null CLR value to its <see cref="NpgsqlDbType"/> and the value to write for the
-    /// typed binary-COPY write, covering the realistic ETL type matrix. An unsupported type returns a
-    /// null <see cref="NpgsqlDbType"/>, signalling the caller to fall back to an untyped write so
-    /// Npgsql infers the wire type (preserving the previously-accepted input range).
+    /// typed binary-COPY write, covering the supported ETL type matrix. A type outside the matrix
+    /// throws a clear <see cref="InvalidOperationException"/> naming the column and CLR type, rather
+    /// than silently deferring to Npgsql's wire-type inference.
     /// </summary>
     /// <remarks>
     /// Date/time handling matches Npgsql's binary-COPY rules for the chosen <see cref="NpgsqlDbType"/>:
@@ -117,7 +114,7 @@ internal sealed class PgsqlExecutor : DapperExecutor
     /// </item>
     /// </list>
     /// </remarks>
-    private static (NpgsqlDbType? Type, object Value) NpgsqlTypeOf(object value) => value switch
+    private static (NpgsqlDbType Type, object Value) NpgsqlTypeOf(string column, object value) => value switch
     {
         int => (NpgsqlDbType.Integer, value),
         long => (NpgsqlDbType.Bigint, value),
@@ -137,7 +134,9 @@ internal sealed class PgsqlExecutor : DapperExecutor
         DateTime { Kind: DateTimeKind.Local } local => (NpgsqlDbType.TimestampTz, local.ToUniversalTime()),
         DateTime => (NpgsqlDbType.Timestamp, value), // Unspecified: wall-clock, no tz.
         byte[] => (NpgsqlDbType.Bytea, value),
-        _ => (null, value), // unlisted CLR type: caller falls back to untyped write (Npgsql infers).
+        _ => throw new InvalidOperationException(
+            $"BulkInsert: Spalte '{column}' hat einen nicht unterstützten CLR-Typ " +
+            $"'{value.GetType().Name}' für den Postgres-Binär-COPY."),
     };
 
     private static void EnsureSameKeys(List<string> columns, IDictionary<string, object?> row)

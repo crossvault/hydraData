@@ -8,10 +8,17 @@
     <Company>crossVault GmbH</Company>
     <Description>Embeddable, script-driven data pump engine for .NET 10 (HydraData).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/crossvault/hydradata</PackageProjectUrl>
+    <PackageTags>etl;data-pump;scripting;csv;excel;sql;postgresql;sqlserver;duckdb;roslyn;dotnet</PackageTags>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Repo-root README shipped in the package (NuGet best practice). Path is relative to this csproj. -->
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Dapper" />
