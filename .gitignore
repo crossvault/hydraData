@@ -1,0 +1,16 @@
+bin/
+obj/
+TestResults/
+cov-unit/
+cov-int/
+cov/
+_licenses/
+_runs/
+_pack/
+
+# Internal/private agent and development artifacts
+.agents/
+docs/development/
+docs/memory/
+docs/technical/
+docs/Datenpumpe-ScriptEngine-BestPractice.md

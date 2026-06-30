@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HydraData.Engine/HydraData.Engine.csproj" />
+    <Project Path="src/HydraData.Host/HydraData.Host.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/HydraData.Engine.IntegrationTests/HydraData.Engine.IntegrationTests.csproj" />
+    <Project Path="test/HydraData.Engine.Tests/HydraData.Engine.Tests.csproj" />
+    <Project Path="test/HydraData.Host.Tests/HydraData.Host.Tests.csproj" />
+  </Folder>
+</Solution>

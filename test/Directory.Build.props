@@ -1,0 +1,9 @@
+<Project>
+  <!-- Inherit repo-root props, then relax doc/packaging rules that don't apply to test code. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+  <PropertyGroup>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+</Project>

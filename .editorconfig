@@ -1,0 +1,36 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,csproj,props,targets,xml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+# --- File header (crossVault GmbH) ---
+file_header_template = Copyright (c) 2026 crossVault GmbH.
+
+# --- Language conventions ---
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+csharp_prefer_braces = true:silent
+csharp_style_var_for_built_in_types = false:silent
+csharp_style_var_when_type_is_apparent = true:silent
+dotnet_style_qualification_for_field = false:warning
+dotnet_style_qualification_for_property = false:warning
+dotnet_style_require_accessibility_modifiers = for_non_interface_members:warning
+
+# --- Analyzer severities ---
+dotnet_diagnostic.IDE0055.severity = warning   # formatting (whitespace/indent) breaks the build
+dotnet_diagnostic.IDE0073.severity = warning   # file header required
+dotnet_diagnostic.IDE0161.severity = warning   # file-scoped namespace
+dotnet_analyzer_diagnostic.category-Style.severity = suggestion

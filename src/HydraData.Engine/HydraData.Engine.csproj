@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Framework/Nullable/ImplicitUsings/doc-gen inherited from repo-root Directory.Build.props. -->
+  <PropertyGroup>
+    <!-- T01.6 NuGet packaging metadata -->
+    <PackageId>HydraData.Engine</PackageId>
+    <Authors>crossVault GmbH</Authors>
+    <Company>crossVault GmbH</Company>
+    <Description>Embeddable, script-driven data pump engine for .NET 10 (HydraData).</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="DuckDB.NET.Data.Full" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- Always referenced (PrivateAssets=all, no consumer leak) so T01.5's local pack verification works.
+         Without a git remote, SourceLink emits non-fatal "no remote" warnings; full links require the real remote. -->
+    <PackageReference Include="Microsoft.SourceLink.GitHub">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="MiniExcel" />
+    <PackageReference Include="Npgsql" />
+    <PackageReference Include="Sep" />
+  </ItemGroup>
+
+</Project>

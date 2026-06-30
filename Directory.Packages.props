@@ -1,0 +1,33 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <!-- Versions resolved from current stable via `dotnet add package` (no guessing, T01.3).
+       IncludeAssets/PrivateAssets are set on each <PackageReference>, not here (ignored on PackageVersion). -->
+  <!-- Engine core -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
+    <PackageVersion Include="Dapper" Version="2.1.79" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageVersion Include="MiniExcel" Version="1.44.1" />
+    <PackageVersion Include="Sep" Version="0.15.0" />
+    <PackageVersion Include="DuckDB.NET.Data.Full" Version="1.5.3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.300" />
+    <PackageVersion Include="Spectre.Console" Version="0.57.0" />
+  </ItemGroup>
+  <!-- Test stack (xUnit v3 under VSTest + coverage + Testcontainers) -->
+  <ItemGroup>
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.12.0" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.12.0" />
+  </ItemGroup>
+</Project>

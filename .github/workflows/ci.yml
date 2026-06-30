@@ -1,0 +1,149 @@
+name: ci
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  release:
+    types: [ published ]
+
+env:
+  CI: 'true'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore hydradata.slnx
+
+      - name: Format check (T01.4)
+        run: dotnet format hydradata.slnx --verify-no-changes --severity warn
+
+      - name: Build (TreatWarningsAsErrors)
+        run: dotnet build hydradata.slnx -c Release --no-restore
+
+      # Unit tests only here; integration tests (Docker/Testcontainers) run in the integration job.
+      # Coverage from both jobs is merged + gated (Line>=90 / Branch>=80) in coverage-gate (T08.5).
+      - name: Unit test + coverage
+        run: dotnet test hydradata.slnx -c Release --no-build --collect:"XPlat Code Coverage" --results-directory ./cov-unit --filter "FullyQualifiedName!~IntegrationTests"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: ./cov-unit/**/coverage.cobertura.xml
+
+  integration-test:
+    # Docker-backed Testcontainers (MSSQL/PGSQL). ubuntu-latest runners provide Docker.
+    # Depends on build-test so a build failure doesn't produce a misleading green integration check.
+    needs: [build-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Integration tests + coverage
+        run: dotnet test test/HydraData.Engine.IntegrationTests -c Release --collect:"XPlat Code Coverage" --results-directory ./cov-int
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: ./cov-int/**/coverage.cobertura.xml
+
+  coverage-gate:
+    # T08.5: merge unit + integration coverage and enforce Line>=90 / Branch>=80. A removed test that
+    # drops coverage below the gate fails this job (and thus the build).
+    needs: [ build-test, integration-test ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./cov
+      - name: Merge coverage + enforce gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          reportgenerator -reports:"./cov/**/coverage.cobertura.xml" -targetdir:"./cov/report" -reporttypes:"TextSummary;Html"
+          python3 .github/scripts/coverage_gate.py ./cov/report/Summary.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: ./cov/report
+
+  license-audit:
+    # T01.7 / license policy: transitive license audit. EPPlus >= 5 and ClosedXML are forbidden
+    # (their licenses are incompatible). SDK-native `dotnet list package` — no extra tool/runtime.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore
+        run: dotnet restore hydradata.slnx
+      - name: Audit transitive packages (shipped projects)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _licenses
+          # Tests are not shipped; audit the deployable projects' full transitive graphs.
+          for proj in src/HydraData.Engine/HydraData.Engine.csproj src/HydraData.Host/HydraData.Host.csproj; do
+            name=$(basename "$proj" .csproj)
+            dotnet list "$proj" package --include-transitive --format json > "_licenses/$name.json"
+          done
+          python3 .github/scripts/license_gate.py _licenses/*.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: license-report
+          path: ./_licenses
+
+  publish:
+    # NuGet.org Trusted Publishing via OIDC — no stored API key (NUGET_API_KEY secret) anywhere.
+    # Runs only when a GitHub Release is published; package version comes from the release tag (vX.Y.Z).
+    # Gated on a green build so a broken package never ships (a pushed NuGet version cannot be deleted).
+    if: github.event_name == 'release'
+    needs: [ build-test ]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # required: GitHub mints the OIDC token NuGet exchanges for a short-lived key
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ github.event.release.tag_name }}"
+          version="${version#v}"   # strip leading v: v1.2.3 -> 1.2.3
+          dotnet pack hydradata.slnx -c Release -o ./artifacts -p:Version="$version"
+
+      - name: NuGet auth (Trusted Publishing / OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}   # nuget.org username that owns the trusted-publishing policy
+
+      - name: Push
+        run: >
+          dotnet nuget push ./artifacts/*.nupkg
+          --api-key ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
