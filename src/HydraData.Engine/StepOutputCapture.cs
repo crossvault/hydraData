@@ -56,7 +56,13 @@ public sealed class StepOutputCapture : IAsyncDisposable
     }
 
     /// <summary>The text written to stdout and stderr during the capture, in write order.</summary>
-    public string Output => _buffer.ToString();
+    public string Output
+    {
+        get
+        {
+            lock (_writer) return _buffer.ToString();
+        }
+    }
 
     /// <summary>Restores the original console writers and releases the capture gate. Idempotent.</summary>
     /// <returns>A completed task.</returns>

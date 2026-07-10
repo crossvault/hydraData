@@ -161,6 +161,9 @@ public sealed class StepRunner
             result = StepResult.Fail($"Step crashed: {ex.Message}", ex);
         }
 
+        result ??= StepResult.Fail(
+            "Step returned no result — end the script with 'return Ok();', 'return Warn(...)' or 'return Fail(...)'.");
+
         var effective = MaxSeverity(result.Severity, context.Notes);
         var commit = effective <= Severity.Warning && !cancelledByCaller;
 

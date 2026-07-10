@@ -58,6 +58,65 @@ public class StepOutputCaptureTests
         var second = await secondStart;
         await second.DisposeAsync();
     }
+
+    [Fact]
+    public async Task Output_read_uses_the_synchronized_writer_monitor()
+    {
+        await using var capture = await StepOutputCapture.StartAsync(TestContext.Current.CancellationToken);
+        var writerField = typeof(StepOutputCapture).GetField(
+            "_writer",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var writer = Assert.IsAssignableFrom<TextWriter>(writerField?.GetValue(capture));
+        var monitorHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseMonitor = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var holder = Task.Run(() =>
+        {
+            lock (writer)
+            {
+                monitorHeld.SetResult();
+                releaseMonitor.Task.GetAwaiter().GetResult();
+            }
+        }, TestContext.Current.CancellationToken);
+
+        await monitorHeld.Task;
+        var readTask = Task.Run(() => capture.Output, TestContext.Current.CancellationToken);
+
+        try
+        {
+            var completedEarly = await Task.WhenAny(
+                readTask,
+                Task.Delay(100, TestContext.Current.CancellationToken)) == readTask;
+            Assert.False(completedEarly, "Output read did not synchronize with writer operations");
+        }
+        finally
+        {
+            releaseMonitor.SetResult();
+        }
+
+        await holder;
+        await readTask;
+    }
+
+    [Fact]
+    public async Task Cancelled_gate_wait_does_not_redirect_console_or_leak_gate()
+    {
+        var original = Console.Out;
+        await using var first = await StepOutputCapture.StartAsync(TestContext.Current.CancellationToken);
+        var redirected = Console.Out;
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => StepOutputCapture.StartAsync(cancelled.Token));
+        Assert.Same(redirected, Console.Out);
+
+        await first.DisposeAsync();
+        Assert.Same(original, Console.Out);
+
+        await using var afterCancellation =
+            await StepOutputCapture.StartAsync(TestContext.Current.CancellationToken);
+    }
 }
 
 /// <summary>

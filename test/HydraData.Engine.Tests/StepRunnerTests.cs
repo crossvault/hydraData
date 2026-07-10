@@ -62,6 +62,22 @@ public class StepRunnerTests
         Assert.Equal(1, gateway.Slots[0].Commits);
     }
 
+    [Fact]
+    public async Task Public_step_verdict_with_warning_commits()
+    {
+        var (runner, gateway) = NewRunner();
+        var outcome = await Run(
+            runner,
+            "Execute(\"x\"); throw new StepVerdict(StepResult.Warn(\"partial\"));",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(Severity.Warning, outcome.EffectiveSeverity);
+        Assert.Equal("partial", outcome.Result.Message);
+        Assert.True(outcome.Committed);
+        Assert.Equal(1, gateway.Slots[0].Commits);
+        Assert.Equal(0, gateway.Slots[0].Rollbacks);
+    }
+
     // ── Policy row 3: Fail => Rollback ──────────────────────────────────────────
     [Fact]
     public async Task Fail_rolls_back()
@@ -98,6 +114,22 @@ public class StepRunnerTests
         Assert.Equal(Severity.Error, outcome.Result.Severity);
         Assert.Contains("kaboom", outcome.Result.Message, StringComparison.Ordinal);
         Assert.Equal(1, gateway.Slots[0].Rollbacks);
+    }
+
+    [Fact]
+    public async Task Missing_return_becomes_clear_error_and_rolls_back()
+    {
+        var (runner, gateway) = NewRunner();
+
+        var outcome = await Run(runner, "Execute(\"x\");", TestContext.Current.CancellationToken);
+
+        Assert.Equal(Severity.Error, outcome.EffectiveSeverity);
+        Assert.Contains("Step returned no result", outcome.Result.Message, StringComparison.Ordinal);
+        Assert.Contains("return Ok();", outcome.Result.Message, StringComparison.Ordinal);
+        Assert.False(outcome.Committed);
+        Assert.Equal(0, gateway.Slots[0].Commits);
+        Assert.Equal(1, gateway.Slots[0].Rollbacks);
+        Assert.True(gateway.Slots[0].Disposed);
     }
 
     // ── Command-timeout propagation (FIX 1): StepTimeout reaches the DB seam ──────
@@ -228,6 +260,28 @@ public class StepRunnerTests
 
         Assert.Equal(1, gateway.Slots[0].Rollbacks);
         Assert.Equal(0, gateway.Slots[0].Commits);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_takes_priority_when_timeout_is_also_signalled()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var (runner, gateway) = NewRunner(time);
+        using var cts = new CancellationTokenSource();
+
+        const string code =
+            "Execute(\"x\"); await System.Threading.Tasks.Task.Delay(System.Threading.Timeout.Infinite, Cancellation); return Ok();";
+
+        var runTask = Run(runner, code, cts.Token, timeout: TimeSpan.FromSeconds(5));
+
+        await gateway.WaitForSlotCountAsync(1, TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromSeconds(6));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runTask);
+        Assert.Equal(0, gateway.Slots[0].Commits);
+        Assert.Equal(1, gateway.Slots[0].Rollbacks);
+        Assert.True(gateway.Slots[0].Disposed);
     }
 
     // ── Finalize exception handling (correction 1) ──────────────────────────────
