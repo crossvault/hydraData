@@ -1,6 +1,7 @@
 // Copyright (c) 2026 crossVault GmbH.
 
 using System.Data.Common;
+using System.Globalization;
 using Xunit;
 
 namespace HydraData.Engine.Tests;
@@ -111,6 +112,32 @@ public class ConnectionRegistryTests
     }
 
     [Fact]
+    public void Numeric_decimal_fallback_uses_invariant_decimal_text()
+    {
+        var xml = """
+            <ConnectionStrings>
+              <ConnectionString targetSystem="MSSQL" name="x">
+                <Parameters><Parameter key="Password" value="1.5" type="Numeric" /></Parameters>
+              </ConnectionString>
+            </ConnectionStrings>
+            """;
+
+        var previousCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("de-DE");
+            var registry = ConnectionRegistry.Parse(xml);
+            var conn = Assert.Single(registry.Connections);
+
+            Assert.Equal("1.5", AsKeyValues(conn.ConnectionString)["Password"]);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previousCulture;
+        }
+    }
+
+    [Fact]
     public void Deprecated_type_attribute_on_ConnectionString_is_ignored_with_warning()
     {
         var xml = """
@@ -145,6 +172,9 @@ public class ConnectionRegistryTests
               <ConnectionString targetSystem="MSSQL" name="STAGE">
                 <Parameters><Parameter key="Server" value="db99" type="String" /></Parameters>
               </ConnectionString>
+              <ConnectionString targetSystem="MSSQL" name="archive">
+                <Parameters><Parameter key="Server" value="db03" type="String" /></Parameters>
+              </ConnectionString>
             </ConnectionStrings>
             """;
 
@@ -153,6 +183,14 @@ public class ConnectionRegistryTests
         // Warning is emitted at parse time.
         Assert.Contains(registry.Warnings,
             w => w.Message.Contains("Doppelte", StringComparison.OrdinalIgnoreCase));
+
+        // The first duplicate remains in declaration order, and an unrelated later id stays resolvable.
+        Assert.Collection(
+            registry.Connections,
+            first => Assert.Equal("db01", AsKeyValues(first.ConnectionString)["Data Source"]),
+            unique => Assert.Equal("mssql|archive", unique.Id));
+        var archive = registry.TryResolve("MSSQL|archive");
+        Assert.Same(registry.Connections[1], archive);
 
         // Hard error on resolution (no silent last-wins).
         var allEx = Assert.Throws<InvalidOperationException>(() => registry.ResolveAll());
@@ -263,6 +301,45 @@ public class ConnectionRegistryTests
         // Provider-specific MSSQL builder: Server + Port collapse to 'Data Source=host,port'.
         Assert.Contains("db01,1433", conn.ConnectionString, StringComparison.Ordinal);
         Assert.DoesNotContain("Port=", conn.ConnectionString, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Mssql_port_without_server_alias_throws_clear_format_exception()
+    {
+        var xml = """
+            <ConnectionStrings>
+              <ConnectionString targetSystem="MSSQL" name="x">
+                <Parameters><Parameter key="Port" value="1433" type="Numeric" /></Parameters>
+              </ConnectionString>
+            </ConnectionStrings>
+            """;
+
+        var ex = Assert.Throws<FormatException>(() => ConnectionRegistry.Parse(xml));
+
+        Assert.Contains("Port", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Server", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Data Source")]
+    [InlineData("Address")]
+    public void Mssql_server_alias_with_port_builds_host_port_data_source(string serverAlias)
+    {
+        var xml = $"""
+            <ConnectionStrings>
+              <ConnectionString targetSystem="MSSQL" name="x">
+                <Parameters>
+                  <Parameter key="{serverAlias}" value="db01" type="String" />
+                  <Parameter key="Port" value="1433" type="Numeric" />
+                </Parameters>
+              </ConnectionString>
+            </ConnectionStrings>
+            """;
+
+        var registry = ConnectionRegistry.Parse(xml);
+        var conn = Assert.Single(registry.Connections);
+
+        Assert.Equal("db01,1433", AsKeyValues(conn.ConnectionString)["Data Source"]);
     }
 
     [Fact]

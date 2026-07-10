@@ -250,6 +250,43 @@ public sealed class PgsqlDbSeamTests : IAsyncLifetime
     }
 
     [Fact]
+    public void BulkInsert_all_null_uuid_and_text_columns_preserves_every_null()
+    {
+        using var slot = OpenSlot();
+        var exec = slot.Executor;
+        exec.Execute("CREATE TABLE bulk_all_null (id INT NOT NULL, g UUID NULL, note TEXT NULL);", null);
+
+        var rows = new List<IDictionary<string, object?>>
+        {
+            new Dictionary<string, object?> { ["id"] = 1, ["g"] = null, ["note"] = null },
+            new Dictionary<string, object?> { ["id"] = 2, ["g"] = null, ["note"] = null },
+        };
+        exec.BulkInsert("bulk_all_null", rows);
+
+        Assert.Equal(2L, exec.Scalar<long>("SELECT COUNT(*) FROM bulk_all_null;", null));
+        Assert.Equal(2L, exec.Scalar<long>("SELECT COUNT(*) FROM bulk_all_null WHERE g IS NULL;", null));
+        Assert.Equal(2L, exec.Scalar<long>("SELECT COUNT(*) FROM bulk_all_null WHERE note IS NULL;", null));
+        slot.Commit();
+    }
+
+    [Fact]
+    public void BulkInsert_supports_schema_qualified_table_name()
+    {
+        using var slot = OpenSlot();
+        var exec = slot.Executor;
+        exec.Execute("CREATE SCHEMA etl; CREATE TABLE etl.\"Dst\" (id INT NOT NULL);", null);
+
+        var rows = new List<IDictionary<string, object?>>
+        {
+            new Dictionary<string, object?> { ["id"] = 42 },
+        };
+        exec.BulkInsert("etl.Dst", rows);
+
+        Assert.Equal(1L, exec.Scalar<long>("SELECT COUNT(*) FROM etl.\"Dst\" WHERE id = 42;", null));
+        slot.Commit();
+    }
+
+    [Fact]
     public void BulkInsert_null_into_default_column_stores_null_not_default()
     {
         // PGSQL symmetry with MssqlDbSeamTests.BulkInsert_keepnulls_stores_null_not_column_default: a column

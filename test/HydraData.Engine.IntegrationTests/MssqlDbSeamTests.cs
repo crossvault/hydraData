@@ -1,5 +1,6 @@
 // Copyright (c) 2026 crossVault GmbH.
 
+using System.Diagnostics;
 using Microsoft.Data.SqlClient;
 using Testcontainers.MsSql;
 using Xunit;
@@ -231,6 +232,95 @@ public sealed class MssqlDbSeamTests : IAsyncLifetime
     }
 
     [Fact]
+    public void BulkInsert_all_null_guid_and_text_columns_preserves_every_null()
+    {
+        using var slot = OpenSlot();
+        var exec = slot.Executor;
+        exec.Execute(
+            "CREATE TABLE dbo.bulk_all_null (id INT NOT NULL, g UNIQUEIDENTIFIER NULL, note NVARCHAR(50) NULL);",
+            null);
+
+        var rows = new List<IDictionary<string, object?>>
+        {
+            new Dictionary<string, object?> { ["id"] = 1, ["g"] = null, ["note"] = null },
+            new Dictionary<string, object?> { ["id"] = 2, ["g"] = null, ["note"] = null },
+        };
+        exec.BulkInsert("dbo.bulk_all_null", rows);
+
+        Assert.Equal(2, exec.Scalar<int>("SELECT COUNT(*) FROM dbo.bulk_all_null;", null));
+        Assert.Equal(2, exec.Scalar<int>("SELECT COUNT(*) FROM dbo.bulk_all_null WHERE g IS NULL;", null));
+        Assert.Equal(2, exec.Scalar<int>("SELECT COUNT(*) FROM dbo.bulk_all_null WHERE note IS NULL;", null));
+        slot.Commit();
+    }
+
+    [Fact]
+    public void Command_timeout_aborts_waitfor_with_concrete_timeout_in_expected_window()
+    {
+        using (var setup = OpenSlot())
+        {
+            setup.Executor.Execute("CREATE TABLE dbo.command_timeout_setup (id INT);", null);
+            setup.Commit();
+        }
+
+        using var slot = new ConnectionGateway().Open(_info, commandTimeoutSeconds: 2);
+        var stopwatch = Stopwatch.StartNew();
+
+        var exception = Assert.ThrowsAny<Exception>(() =>
+            slot.Executor.Execute("WAITFOR DELAY '00:00:30';", null));
+        stopwatch.Stop();
+
+        Assert.True(IsMssqlTimeout(exception), $"Expected a concrete MSSQL timeout exception chain, got: {exception}");
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(15));
+    }
+
+    [Fact]
+    public void BulkInsert_timeout_aborts_blocked_table_with_concrete_timeout_in_expected_window()
+    {
+        using (var setup = OpenSlot())
+        {
+            setup.Executor.Execute("CREATE TABLE dbo.bulk_timeout_target (id INT NOT NULL);", null);
+            setup.Commit();
+        }
+
+        SqlConnection? blockerConnection = null;
+        SqlTransaction? blockerTransaction = null;
+        try
+        {
+            blockerConnection = new SqlConnection(_info.ConnectionString);
+            blockerConnection.Open();
+            blockerTransaction = blockerConnection.BeginTransaction();
+            using (var blockerCommand = blockerConnection.CreateCommand())
+            {
+                blockerCommand.Transaction = blockerTransaction;
+                blockerCommand.CommandText =
+                    "SELECT TOP (0) * FROM dbo.bulk_timeout_target WITH (TABLOCKX, HOLDLOCK);";
+                blockerCommand.ExecuteNonQuery();
+            }
+
+            using var slot = new ConnectionGateway().Open(_info, commandTimeoutSeconds: 2);
+            var rows = new List<IDictionary<string, object?>>
+            {
+                new Dictionary<string, object?> { ["id"] = 1 },
+            };
+            var stopwatch = Stopwatch.StartNew();
+
+            var exception = Assert.ThrowsAny<Exception>(() =>
+                slot.Executor.BulkInsert("dbo.bulk_timeout_target", rows));
+            stopwatch.Stop();
+
+            Assert.True(
+                IsMssqlTimeout(exception),
+                $"Expected a concrete MSSQL timeout exception chain, got: {exception}");
+            Assert.InRange(stopwatch.Elapsed, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            blockerTransaction?.Dispose();
+            blockerConnection?.Dispose();
+        }
+    }
+
+    [Fact]
     public void BulkInsert_volume_smoke()
     {
         using var slot = OpenSlot();
@@ -344,5 +434,16 @@ public sealed class MssqlDbSeamTests : IAsyncLifetime
         using var slot = new ConnectionGateway().Open(info);
         Assert.Equal(1, slot.Executor.Scalar<int>("SELECT 1;", null));
         slot.Commit();
+    }
+
+    private static bool IsMssqlTimeout(Exception exception)
+    {
+        if (exception is SqlException { Number: -2 } or TimeoutException)
+            return true;
+
+        if (exception is AggregateException aggregate && aggregate.InnerExceptions.Any(IsMssqlTimeout))
+            return true;
+
+        return exception.InnerException is not null && IsMssqlTimeout(exception.InnerException);
     }
 }

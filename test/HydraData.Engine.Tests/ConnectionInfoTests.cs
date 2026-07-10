@@ -80,4 +80,23 @@ public class ConnectionInfoTests
         Assert.Null(typeof(IConnection).GetProperty(nameof(ConnectionInfo.ConnectionString)));
         Assert.NotNull(typeof(ConnectionInfo).GetProperty(nameof(ConnectionInfo.ConnectionString)));
     }
+
+    [Fact]
+    public void AsConnectionInfo_rejects_foreign_connection_implementation()
+    {
+        IConnection connection = new ForeignConnection();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => ConnectionInfo.AsConnectionInfo(connection));
+
+        Assert.Contains(nameof(ConnectionInfo), ex.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class ForeignConnection : IConnection
+    {
+        public string Id => "mssql|foreign";
+
+        public string Name => "foreign";
+
+        public DbType DbType => DbType.Mssql;
+    }
 }
