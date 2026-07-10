@@ -177,6 +177,15 @@ public sealed class StepRunner
             {
                 context.CommitAll();
             }
+            catch (SlotFinalizationException ex) when (!cancelledByCaller && ex.TransactionErrors.Count == 0)
+            {
+                // Every Commit succeeded, so the data is durable. Cleanup still failed and must surface
+                // as an Error, but it must not erase the truthful committed state or suggest a data re-run.
+                var cleanupMessage = string.Join("; ", ex.CleanupErrors.Select(error => error.Message));
+                result = StepResult.Fail(
+                    $"Data was committed successfully, but connection cleanup failed: {cleanupMessage}", ex);
+                effective = Severity.Error;
+            }
             catch (Exception ex) when (!cancelledByCaller)
             {
                 // Commit failed: data did not land. Demote to error outcome.
@@ -222,7 +231,7 @@ public sealed class StepRunner
         // The message is a fixed template (no ConnectionString / secret is ever logged).
         switch (effective)
         {
-            case Severity.Error:
+            case var severity when severity >= Severity.Error:
                 log.LogError("Step finished with verdict {Verdict} (committed={Committed}): {Message}",
                     effective, commit, result.Message);
                 break;

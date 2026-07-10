@@ -341,6 +341,56 @@ public class StepRunnerTests
         Assert.True(gateway.Slots[0].Disposed);
     }
 
+    [Fact]
+    public async Task Dispose_only_failure_after_all_commits_preserves_committed_true_and_reports_cleanup()
+    {
+        var gateway = new FakeConnectionGateway { NextSlotThrowsOnDispose = true };
+        var runner = new StepRunner(new ScriptCompiler(), gateway, io: null, timeProvider: null);
+
+        var outcome = await runner.RunAsync(
+            "Execute(\"x\"); " +
+            "Execute(GetConnection(CurrentConnection.Name, CurrentConnection.DbType, \"pgsql\"), \"y\"); " +
+            "return Ok();",
+            new PumpState(),
+            new PumpState(),
+            ExternContext.FromValues(new Dictionary<string, object?>()),
+            PumpContextFactory.DefaultConnection,
+            unsafeAllowed: false,
+            stepTimeout: null,
+            logger: null,
+            connections: TwoSystemDirectory(),
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(Severity.Error, outcome.EffectiveSeverity);
+        Assert.True(outcome.Committed);
+        Assert.Contains("committed successfully", outcome.Result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cleanup failed", outcome.Result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("partial commit", outcome.Result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("re-run", outcome.Result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, gateway.Slots.Count);
+        Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Commits));
+        Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
+    }
+
+    [Fact]
+    public async Task Severity_above_error_logs_at_error_level()
+    {
+        var gateway = new FakeConnectionGateway();
+        var logger = new TestLogger();
+        var runner = new StepRunner(
+            new ScriptCompiler(), gateway, io: null, timeProvider: null, logger: logger);
+
+        var outcome = await Run(
+            runner,
+            "return new StepResult((Severity)3, \"above error\");",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal((Severity)3, outcome.EffectiveSeverity);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == Microsoft.Extensions.Logging.LogLevel.Error &&
+            entry.Message.Contains("above error", StringComparison.Ordinal));
+    }
+
     // ── Connection switching: in-script fan-out ──────
 
     [Fact]

@@ -485,8 +485,10 @@ public sealed class PumpContext
         // Finalise then dispose every slot; ensure ALL are disposed even if one throws.
         // Both the finalize call and the Dispose call are individually guarded so a throwing Dispose
         // cannot strand the remaining slots in a multi-slot fan-out (e.g. cross-system scripts that
-        // opened one slot per connection). _slots.Clear runs unconditionally in a final block.
-        List<Exception>? errors = null;
+        // opened one slot per connection). Transaction-finalization failures stay distinct from
+        // cleanup failures so the caller can preserve an already-successful commit decision.
+        List<Exception>? transactionErrors = null;
+        List<Exception>? cleanupErrors = null;
         foreach (var slot in _slots.Values)
         {
             try
@@ -495,7 +497,7 @@ public sealed class PumpContext
             }
             catch (Exception ex)
             {
-                (errors ??= []).Add(ex);
+                (transactionErrors ??= []).Add(ex);
             }
 
             // Dispose is guarded separately so a throwing Dispose cannot skip remaining slots.
@@ -505,15 +507,36 @@ public sealed class PumpContext
             }
             catch (Exception ex)
             {
-                (errors ??= []).Add(ex);
+                (cleanupErrors ??= []).Add(ex);
             }
         }
 
         _slots.Clear();
 
-        if (errors is { Count: > 0 })
-            throw new AggregateException("One or more connection slots failed to finalise.", errors);
+        if (transactionErrors is { Count: > 0 } || cleanupErrors is { Count: > 0 })
+            throw new SlotFinalizationException(transactionErrors ?? [], cleanupErrors ?? []);
     }
+}
+
+/// <summary>
+/// Classifies failures raised while finalizing and cleaning up a step's database slots.
+/// </summary>
+internal sealed class SlotFinalizationException : AggregateException
+{
+    internal SlotFinalizationException(
+        IReadOnlyList<Exception> transactionErrors,
+        IReadOnlyList<Exception> cleanupErrors)
+        : base(
+            "One or more connection slots failed to finalize or clean up.",
+            transactionErrors.Concat(cleanupErrors))
+    {
+        TransactionErrors = transactionErrors;
+        CleanupErrors = cleanupErrors;
+    }
+
+    internal IReadOnlyList<Exception> TransactionErrors { get; }
+
+    internal IReadOnlyList<Exception> CleanupErrors { get; }
 }
 
 /// <summary>A note recorded by a step via <c>Note</c>, carrying a message and a severity.</summary>

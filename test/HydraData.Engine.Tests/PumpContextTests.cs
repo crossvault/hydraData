@@ -229,11 +229,15 @@ public class PumpContextTests
         ctx.Execute(PumpContextFactory.DefaultConnection, "insert into a values (1)");
         ctx.Execute(PumpContextFactory.SecondConnection, "insert into b values (1)");
 
-        var error = Assert.Throws<AggregateException>(ctx.CommitAll);
+        var error = Assert.Throws<SlotFinalizationException>(ctx.CommitAll);
 
+        Assert.IsAssignableFrom<AggregateException>(error);
+        Assert.Single(error.TransactionErrors);
+        Assert.Empty(error.CleanupErrors);
         Assert.Single(error.InnerExceptions);
         Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Commits));
         Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
+        ctx.CommitAll(); // cleared after the failed fan-out; no slot is finalized twice
     }
 
     [Fact]
@@ -244,8 +248,10 @@ public class PumpContextTests
         ctx.Execute(PumpContextFactory.DefaultConnection, "insert into a values (1)");
         ctx.Execute(PumpContextFactory.SecondConnection, "insert into b values (1)");
 
-        var error = Assert.Throws<AggregateException>(ctx.RollbackAll);
+        var error = Assert.Throws<SlotFinalizationException>(ctx.RollbackAll);
 
+        Assert.Single(error.TransactionErrors);
+        Assert.Empty(error.CleanupErrors);
         Assert.Single(error.InnerExceptions);
         Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Rollbacks));
         Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
@@ -259,11 +265,14 @@ public class PumpContextTests
         ctx.Execute(PumpContextFactory.DefaultConnection, "insert into a values (1)");
         ctx.Execute(PumpContextFactory.SecondConnection, "insert into b values (1)");
 
-        var error = Assert.Throws<AggregateException>(ctx.CommitAll);
+        var error = Assert.Throws<SlotFinalizationException>(ctx.CommitAll);
 
+        Assert.Empty(error.TransactionErrors);
+        Assert.Single(error.CleanupErrors);
         Assert.Single(error.InnerExceptions);
         Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Commits));
         Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
+        ctx.CommitAll(); // cleanup failure still clears the slot map
     }
 
     [Fact]
