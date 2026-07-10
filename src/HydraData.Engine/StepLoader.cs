@@ -14,9 +14,10 @@ namespace HydraData.Engine;
 /// <para>
 /// The parser reads leading underscore-separated purely numeric segments. A bracketed
 /// slug is recognised only directly after GG, SS, and the optional TT segment; its contents
-/// may contain separators. Once a non-numeric description token begins, later brackets remain
-/// part of the description. A period (<c>.</c>) separator is also recognised for compatibility
-/// but is not recommended for new scripts.
+/// may contain separators, and its closing bracket must be followed by a separator or the end
+/// of the stem. Once a non-numeric description token begins, later brackets remain part of the
+/// description. A period (<c>.</c>) separator is also recognised for compatibility but is not
+/// recommended for new scripts.
 /// </para>
 /// </remarks>
 public sealed class StepLoader
@@ -127,6 +128,13 @@ public sealed class StepLoader
                 warning = new LoaderWarning(
                     LoaderWarningKind.InvalidTag,
                     $"Filename segment '{invalidSegment}' has an opening '[' but no valid closing ']'.");
+            }
+            else if (closeBracket + 1 < stem.Length && !IsSeparator(stem[closeBracket + 1]))
+            {
+                var invalidSegment = stem[openBracket..];
+                warning = new LoaderWarning(
+                    LoaderWarningKind.InvalidTag,
+                    $"Filename segment '{invalidSegment}' must separate its closing ']' from the description with '_' or '.'.");
             }
             else
             {

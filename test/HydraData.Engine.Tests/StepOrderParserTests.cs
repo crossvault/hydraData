@@ -110,6 +110,32 @@ public class StepOrderParserTests
     }
 
     [Fact]
+    public void Slug_at_end_of_stem_is_valid()
+    {
+        // Coverage-only: end-of-stem is an established valid boundary after the closing bracket.
+        Assert.True(StepLoader.TryParseOrder(
+            "01_10_[kunden]", out var order, out var warning));
+
+        Assert.Equal("[kunden]", order.Slug);
+        Assert.Null(warning);
+    }
+
+    [Fact]
+    public void Slug_followed_immediately_by_description_warns_and_is_not_promoted()
+    {
+        Assert.True(StepLoader.TryParseOrder(
+            "01_10_[kunden]description", out var order, out var warning));
+
+        Assert.Equal(1, order.Group);
+        Assert.Equal(10, order.Step);
+        Assert.Null(order.SubStep);
+        Assert.Null(order.Slug);
+        Assert.NotNull(warning);
+        Assert.Equal(LoaderWarningKind.InvalidTag, warning!.Kind);
+        Assert.Contains("[kunden]description", warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Bracket_after_description_is_not_promoted_to_slug()
     {
         Assert.True(StepLoader.TryParseOrder(
