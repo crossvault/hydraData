@@ -80,6 +80,35 @@ public class StepOrderParserTests
         Assert.Equal(10, order.Step);
     }
 
+    [Theory]
+    [InlineData("01.20.05.fein", 20, 5, null)]
+    [InlineData("01.10.[kunden].desc", 10, null, "[kunden]")]
+    [InlineData("01.10_[kunden]_x", 10, null, "[kunden]")]
+    public void Parses_dotted_and_mixed_separator_compatibility(
+        string stem,
+        int expectedStep,
+        int? expectedSubStep,
+        string? expectedSlug)
+    {
+        // Coverage-only for the existing dotted/mixed compatibility contract.
+        Assert.True(StepLoader.TryParseOrder(stem, out var order, out var warning));
+        Assert.Equal(1, order.Group);
+        Assert.Equal(expectedStep, order.Step);
+        Assert.Equal(expectedSubStep, order.SubStep);
+        Assert.Equal(expectedSlug, order.Slug);
+        Assert.Null(warning);
+    }
+
+    [Fact]
+    public void Preserves_underscores_inside_bracketed_slug()
+    {
+        Assert.True(StepLoader.TryParseOrder(
+            "01_10_[kunden_daten]_laden", out var order, out var warning));
+
+        Assert.Equal("[kunden_daten]", order.Slug);
+        Assert.Null(warning);
+    }
+
     // ── Numeric vs. lexicographic sort proof ─────────────────────────────────
 
     [Fact]
@@ -131,6 +160,16 @@ public class StepOrderParserTests
     {
         Assert.False(StepLoader.TryParseOrder("readme", out _, out _));
         Assert.False(StepLoader.TryParseOrder("01_description_only", out _, out _));
+    }
+
+    [Theory]
+    [InlineData("+01_10_desc")]
+    [InlineData("-01_10_desc")]
+    [InlineData(" 01_10_desc")]
+    [InlineData("01_ 10_desc")]
+    public void Rejects_signed_or_whitespace_padded_numeric_segments(string stem)
+    {
+        Assert.False(StepLoader.TryParseOrder(stem, out _, out _));
     }
 
     [Fact]
@@ -198,6 +237,48 @@ public class StepOrderParserTests
         }
         finally
         {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void LoadFiles_unreadable_meta_falls_back_to_default_and_loads_other_steps()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(dir);
+        FileStream? lockHandle = null;
+        try
+        {
+            var unreadablePath = Path.Combine(dir, "01_10_unreadable.cs");
+            var readablePath = Path.Combine(dir, "01_20_readable.cs");
+            File.WriteAllText(readablePath, "// @name: Readable\nreturn Ok();");
+
+            if (OperatingSystem.IsWindows())
+            {
+                File.WriteAllText(unreadablePath, "// @name: Locked\nreturn Ok();");
+                lockHandle = new FileStream(
+                    unreadablePath,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+            }
+            else
+            {
+                // Reading a directory as text deterministically raises UnauthorizedAccessException on Unix.
+                Directory.CreateDirectory(unreadablePath);
+            }
+
+            var result = new StepLoader().LoadFiles([unreadablePath, readablePath]);
+
+            Assert.Equal(2, result.Steps.Count);
+            Assert.Equal(StepMeta.Default,
+                result.Steps.Single(step => step.FileName == "01_10_unreadable.cs").Meta);
+            Assert.Equal("Readable",
+                result.Steps.Single(step => step.FileName == "01_20_readable.cs").Meta.Name);
+        }
+        finally
+        {
+            lockHandle?.Dispose();
             Directory.Delete(dir, recursive: true);
         }
     }

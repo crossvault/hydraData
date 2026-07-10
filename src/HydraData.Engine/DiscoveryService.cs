@@ -64,6 +64,11 @@ public sealed class DiscoveryService
         // pattern. The single global LoadFiles call below handles all parsing, meta-reading,
         // sorting, and warning detection.
         var allFilePaths = new List<string>();
+        var folderComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var seenFolders = new HashSet<string>(folderComparer);
+
         foreach (var folder in scriptFolders)
         {
             if (!Directory.Exists(folder))
@@ -71,7 +76,11 @@ public sealed class DiscoveryService
                     $"Script folder does not exist: '{folder}'. " +
                     "Verify the path in your engine configuration.");
 
-            allFilePaths.AddRange(StepLoader.GatherCsFiles(folder));
+            var normalizedFolder = NormalizeFolder(folder);
+            if (!seenFolders.Add(normalizedFolder))
+                continue;
+
+            allFilePaths.AddRange(StepLoader.GatherCsFiles(normalizedFolder));
         }
 
         // Single pass: StepLoader sorts globally, reads meta, detects all warnings
@@ -91,5 +100,14 @@ public sealed class DiscoveryService
             groups: groups.AsReadOnly(),
             steps: merged.Steps,
             warnings: merged.Warnings);
+    }
+
+    private static string NormalizeFolder(string folder)
+    {
+        var fullPath = Path.GetFullPath(folder);
+        var root = Path.GetPathRoot(fullPath);
+        return string.Equals(fullPath, root, StringComparison.Ordinal)
+            ? fullPath
+            : fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 }

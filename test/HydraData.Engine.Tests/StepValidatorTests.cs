@@ -146,7 +146,6 @@ public sealed class StepValidatorTests : IDisposable
     [InlineData("#r \"nuget:Pkg\"")]                  // standard form
     [InlineData("#r \"nuget: Pkg\"")]                  // space after colon
     [InlineData("#r\"nuget:Pkg\"")]                    // no space between #r and quote
-    [InlineData("#R \"nuget:x\"")]                     // uppercase #R
     public void PUMP001_produced_for_nuget_directive_variants(string directiveLine)
     {
         var scriptText = directiveLine + "\nreturn Ok();";
@@ -156,6 +155,20 @@ public sealed class StepValidatorTests : IDisposable
         // Exactly one diagnostic — PUMP001 only, no duplicate Roslyn error.
         Assert.Single(report.Diagnostics);
         Assert.Equal(PumpDiagnostics.NuGetDirective, report.Diagnostics[0].Code);
+        Assert.False(report.IsValid);
+    }
+
+    [Fact]
+    public void Uppercase_R_is_a_Roslyn_syntax_error_not_a_reference_directive()
+    {
+        const string scriptText = "#R \"nuget:x\"\nreturn Ok();";
+        var ctx = MakeContext(scriptText);
+
+        var report = new StepValidator().Validate(ctx);
+
+        Assert.DoesNotContain(report.Diagnostics,
+            d => d.Code == PumpDiagnostics.NuGetDirective);
+        Assert.Contains(report.Diagnostics, d => d.Code == "CS1024");
         Assert.False(report.IsValid);
     }
 
@@ -178,6 +191,42 @@ public sealed class StepValidatorTests : IDisposable
     {
         // A nuget reference inside a string literal must NOT trigger PUMP001.
         const string scriptText = "var s = \"#r \\\"nuget:Foo\\\"\";\nreturn Ok();";
+        var ctx = MakeContext(scriptText);
+        var report = new StepValidator().Validate(ctx);
+
+        Assert.DoesNotContain(report.Diagnostics,
+            d => d.Code == PumpDiagnostics.NuGetDirective);
+        Assert.True(report.IsValid);
+    }
+
+    [Fact]
+    public void PUMP001_NOT_produced_for_nuget_text_in_multiline_raw_string()
+    {
+        const string scriptText = """"
+            var value = """
+            #r "nuget:Foo"
+            """;
+            return Ok(value);
+            """";
+
+        var ctx = MakeContext(scriptText);
+        var report = new StepValidator().Validate(ctx);
+
+        Assert.DoesNotContain(report.Diagnostics,
+            d => d.Code == PumpDiagnostics.NuGetDirective);
+        Assert.True(report.IsValid);
+    }
+
+    [Fact]
+    public void PUMP001_NOT_produced_for_nuget_text_in_multiline_verbatim_string()
+    {
+        const string scriptText = """
+            var value = @"
+            #r ""nuget:Foo""
+            ";
+            return Ok(value);
+            """;
+
         var ctx = MakeContext(scriptText);
         var report = new StepValidator().Validate(ctx);
 
@@ -244,6 +293,39 @@ public sealed class StepValidatorTests : IDisposable
     public void PUMP010_code_comes_from_PumpDiagnostics_const()
     {
         Assert.Equal("PUMP010", PumpDiagnostics.UnsafeWithoutGrant);
+    }
+
+    [Fact]
+    public void ValidateStep_reports_the_same_diagnostics_as_batch_validation()
+    {
+        // Coverage-only: the direct overload already shares the same diagnostic collector as batch validation.
+        const string scriptText = "Qery(\"x\");";
+        var ctx = MakeContext(scriptText);
+        var step = Assert.Single(ctx.Steps);
+        var validator = new StepValidator();
+
+        var batch = validator.Validate(ctx);
+        var direct = validator.ValidateStep(step, scriptText);
+
+        Assert.Equal(batch.Diagnostics, direct.Diagnostics);
+        Assert.Equal(batch.IsValid, direct.IsValid);
+    }
+
+    [Fact]
+    public void ValidateStep_reports_both_PUMP001_and_PUMP010_for_combined_violations()
+    {
+        // Coverage-only: PUMP diagnostics are deliberately accumulated before the compile skip.
+        const string scriptText = "// @unsafe: true\n#r \"nuget:Foo\"\nreturn Ok();";
+        var ctx = MakeContext(scriptText);
+        var step = Assert.Single(ctx.Steps);
+
+        var report = new StepValidator(allowUnsafeDirectAccess: false)
+            .ValidateStep(step, scriptText);
+
+        Assert.Contains(report.Diagnostics, d => d.Code == PumpDiagnostics.NuGetDirective);
+        Assert.Contains(report.Diagnostics, d => d.Code == PumpDiagnostics.UnsafeWithoutGrant);
+        Assert.Equal(2, report.Diagnostics.Count);
+        Assert.False(report.IsValid);
     }
 
     // ── PUMP000: CompileSetupGuard (internal fail-safe) ───────────────────────────

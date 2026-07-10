@@ -153,13 +153,13 @@ public sealed class Workspace
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(folder, nameof(allowlist));
 
-            // Allowlist entries must be absolute (PumpFolderPolicy docs say "absolute, normalised
-            // folders"). A relative entry would resolve against the process CWD — an unstable, surprising
-            // root that could silently widen the sandbox — so reject it.
-            if (!Path.IsPathRooted(folder))
+            // Allowlist entries must be fully-qualified absolute paths (PumpFolderPolicy docs say
+            // "absolute, normalised folders"). Relative, drive-relative, and root-relative entries could
+            // resolve against ambient process state and silently widen the sandbox, so reject them.
+            if (!Path.IsPathFullyQualified(folder))
             {
                 throw new ArgumentException(
-                    $"Allowlist folder '{folder}' must be an absolute path.", nameof(allowlist));
+                    $"Allowlist folder '{folder}' must be a fully-qualified absolute path.", nameof(allowlist));
             }
 
             roots.Add(NormalizeFull(folder));

@@ -75,6 +75,34 @@ public sealed class DiscoveryServiceTests : IDisposable
         Assert.Equal([1, 2], ctx.Groups);
     }
 
+    [Fact]
+    public void Duplicate_folder_path_variants_are_scanned_once_without_duplicate_warning()
+    {
+        var dir = MakeDir(("01_10_step.cs", "return Ok();"));
+        var variants = new List<string>
+        {
+            dir,
+            dir + Path.DirectorySeparatorChar,
+            Path.Combine(dir, "."),
+        };
+
+        if (OperatingSystem.IsWindows())
+        {
+            var leaf = Path.GetFileName(dir);
+            var mangledLeaf = string.Concat(leaf.Select(ch =>
+                char.IsLetter(ch)
+                    ? (char.IsUpper(ch) ? char.ToLowerInvariant(ch) : char.ToUpperInvariant(ch))
+                    : ch));
+            variants.Add(Path.Combine(Path.GetDirectoryName(dir)!, mangledLeaf));
+        }
+
+        var ctx = Svc().Discover(variants);
+
+        Assert.Single(ctx.Steps);
+        Assert.DoesNotContain(ctx.Warnings,
+            warning => warning.Kind == LoaderWarningKind.DuplicateOrder);
+    }
+
     // ── group spanning two folders ────────────────────────────────────────────
 
     [Fact]

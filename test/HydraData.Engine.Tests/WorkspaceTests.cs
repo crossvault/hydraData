@@ -167,6 +167,58 @@ public sealed class WorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void Windows_root_relative_and_drive_relative_allowlist_entries_are_rejected()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var rootRelative = Path.DirectorySeparatorChar + Path.Combine("temp", "input");
+        var driveLetter = Path.GetPathRoot(_baseDir)![0];
+        var driveRelative = $"{driveLetter}:relative{Path.DirectorySeparatorChar}input";
+
+        Assert.True(Path.IsPathRooted(rootRelative));
+        Assert.False(Path.IsPathFullyQualified(rootRelative));
+        Assert.True(Path.IsPathRooted(driveRelative));
+        Assert.False(Path.IsPathFullyQualified(driveRelative));
+        Assert.Throws<ArgumentException>(
+            () => NewWorkspace(new PumpFolderPolicy([rootRelative], [])));
+        Assert.Throws<ArgumentException>(
+            () => NewWorkspace(new PumpFolderPolicy([], [driveRelative])));
+    }
+
+    [Fact]
+    public void Relative_traversal_cannot_escape_the_run_directory()
+    {
+        // Coverage-only: normalization plus IsInside already reject both shallow and deep traversal.
+        var ws = NewWorkspace(PumpFolderPolicy.Empty);
+
+        Assert.Throws<UnauthorizedAccessException>(
+            () => ws.ResolveRead(Path.Combine("..", "secret.csv")));
+        Assert.Throws<UnauthorizedAccessException>(
+            () => ws.ResolveRead(Path.Combine("..", "..", "secret.csv")));
+    }
+
+    [Fact]
+    public void Windows_allowlist_comparison_accepts_mangled_case_for_existing_directory()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var allowed = Path.Combine(_baseDir, "CaseSensitiveInput");
+        Directory.CreateDirectory(allowed);
+        var mangled = Path.Combine(_baseDir, "cASEsENSITIVEiNPUT");
+        Assert.True(Directory.Exists(mangled));
+
+        var ws = NewWorkspace(new PumpFolderPolicy([allowed], []));
+        var resolved = ws.ResolveRead(Path.Combine(mangled, "data.csv"));
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(allowed, "data.csv")),
+            resolved,
+            ignoreCase: true);
+    }
+
+    [Fact]
     public void Traversal_that_escapes_the_allowlist_is_blocked()
     {
         var allowed = Path.Combine(_baseDir, "input");

@@ -162,4 +162,26 @@ public class StepMetaTests
         var meta = StepMeta.Parse("// @haltOnError: maybe");
         Assert.True(meta.HaltOnError);
     }
+
+    [Theory]
+    [InlineData("// @NaMe: Case\n// @UnSaFe: TrUe", "Case", null, true, true)]
+    [InlineData("// @description: first: second", null, "first: second", true, false)]
+    [InlineData("// @name: Before\n\n// @description: After", "Before", "After", true, false)]
+    [InlineData("// @unknown: ignored\n// @haltOnError: false", null, null, false, false)]
+    [InlineData("//@name: Compact", "Compact", null, true, false)]
+    public void Parses_supported_leading_comment_variants(
+        string source,
+        string? expectedName,
+        string? expectedDescription,
+        bool expectedHaltOnError,
+        bool expectedUnsafe)
+    {
+        // Coverage-only: these inputs exercise the parser's established case, colon, and block rules.
+        var meta = StepMeta.Parse(source);
+
+        Assert.Equal(expectedName, meta.Name);
+        Assert.Equal(expectedDescription, meta.Description);
+        Assert.Equal(expectedHaltOnError, meta.HaltOnError);
+        Assert.Equal(expectedUnsafe, meta.Unsafe);
+    }
 }

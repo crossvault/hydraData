@@ -1,6 +1,8 @@
 // Copyright (c) 2026 crossVault GmbH.
 
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -26,10 +28,10 @@ namespace HydraData.Engine;
 ///   <item>
 ///     <term><see cref="PumpDiagnostics.NuGetDirective"/> (PUMP001)</term>
 ///     <description>
-///     The script contains a line-anchored <c>#r "nuget:"</c> directive (the trimmed line
-///     starts with <c>#r</c> and references nuget). A directive inside a comment or string
-///     literal does NOT trigger this. When PUMP001 fires, the Roslyn compile step is skipped
-///     for that script so there is exactly one diagnostic.
+///     Roslyn parses a <c>#r</c> directive whose reference uses the <c>nuget:</c> scheme.
+///     Directive-like text inside a comment or string literal does NOT trigger this. When
+///     PUMP001 fires, the Roslyn compile step is skipped so it does not add a duplicate Roslyn
+///     diagnostic; other engine diagnostics such as PUMP010 are still collected.
 ///     </description>
 ///   </item>
 ///   <item>
@@ -44,15 +46,6 @@ namespace HydraData.Engine;
 /// </remarks>
 public sealed class StepValidator
 {
-    // Matches a line whose trimmed content starts with #r (case-insensitive) followed by
-    // optional whitespace, a double-quote, optional whitespace, "nuget" and a colon.
-    // Examples matched: `#r "nuget:Pkg"`, `#r"nuget:Pkg"`, `#R "nuget : x"`, ` #r "nuget:Pkg"`.
-    // A C# comment `// #r "nuget:Pkg"` is NOT matched because the trim starts with `//`.
-    // A string literal containing #r "nuget:" is NOT matched because the line itself does not
-    // start (after trimming) with #r.
-    private static readonly Regex NuGetDirectivePattern =
-        new(@"^\s*#r\s*""\s*nuget\s*:", RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
-
     private readonly bool _allowUnsafeDirectAccess;
     private readonly ScriptCompiler _compiler;
     private readonly ILogger _logger;
@@ -132,9 +125,9 @@ public sealed class StepValidator
     /// </summary>
     private void CollectStepDiagnostics(StepDescriptor step, string scriptText, List<ScriptDiagnostic> diagnostics)
     {
-        // PUMP001: line-anchored #r "nuget:" directive is not allowed.
-        // When detected, Roslyn compilation is skipped for this script so there is
-        // exactly one diagnostic (no duplicate Roslyn error from the failed directive).
+        // PUMP001: a Roslyn-parsed #r "nuget:" directive is not allowed.
+        // When detected, Roslyn compilation is skipped for this script so there is no
+        // duplicate Roslyn error from the failed directive. Other PUMP diagnostics still accumulate.
         var hasPump001 = ContainsNuGetDirective(scriptText);
         if (hasPump001)
         {
@@ -172,13 +165,27 @@ public sealed class StepValidator
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Returns <see langword="true"/> when <paramref name="scriptText"/> contains a
-    /// line-anchored <c>#r "nuget:"</c> directive. The match is line-anchored: only a line
-    /// whose trimmed content starts with <c>#r</c> (case-insensitive) qualifies. A directive
-    /// inside a C# comment (<c>// #r "nuget:…"</c>) or inside a string literal is not matched.
+    /// Returns <see langword="true"/> when Roslyn parses a <c>#r</c> directive whose
+    /// reference has the <c>nuget:</c> scheme. Inspecting directive trivia keeps directive-like
+    /// text inside comments and all string-literal forms out of the policy check.
     /// </summary>
-    private static bool ContainsNuGetDirective(string scriptText) =>
-        NuGetDirectivePattern.IsMatch(scriptText);
+    private static bool ContainsNuGetDirective(string scriptText)
+    {
+        var parseOptions = CSharpParseOptions.Default.WithKind(SourceCodeKind.Script);
+        var root = CSharpSyntaxTree.ParseText(scriptText, parseOptions).GetRoot();
+
+        return root.DescendantTrivia(descendIntoTrivia: true)
+            .Select(trivia => trivia.GetStructure())
+            .OfType<ReferenceDirectiveTriviaSyntax>()
+            .Any(directive => IsNuGetReference(directive.File.ValueText));
+    }
+
+    private static bool IsNuGetReference(string reference)
+    {
+        var colon = reference.IndexOf(':');
+        return colon >= 0
+            && reference[..colon].Trim().Equals("nuget", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Compiles the script text through the shared <see cref="ScriptCompiler"/> cache and appends its

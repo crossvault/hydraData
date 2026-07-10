@@ -1,5 +1,7 @@
 // Copyright (c) 2026 crossVault GmbH.
 
+using System.Globalization;
+
 namespace HydraData.Engine;
 
 /// <summary>
@@ -10,8 +12,8 @@ namespace HydraData.Engine;
 /// Filename format: <c>&lt;GG&gt;_&lt;SS&gt;[_&lt;TT&gt;][_[slug]]_description.cs</c>
 /// </para>
 /// <para>
-/// The parser reads leading underscore-separated purely numeric segments until
-/// a token starting with <c>[</c> (bracketed slug) or a non-numeric token
+/// The parser extracts a bracketed slug from the full stem, then reads leading
+/// underscore-separated purely numeric segments until a non-numeric token
 /// (description start) is encountered. A period (<c>.</c>) separator is also
 /// recognised for compatibility but is not recommended for new scripts.
 /// </para>
@@ -64,9 +66,7 @@ public sealed class StepLoader
 
             if (!parsed) continue;
 
-            var meta = File.Exists(path)
-                ? StepMeta.Parse(File.ReadAllText(path))
-                : StepMeta.Default;
+            var meta = ReadMetaOrDefault(path);
 
             descriptors.Add(new StepDescriptor(
                 FileName: Path.GetFileName(path),
@@ -109,36 +109,37 @@ public sealed class StepLoader
         order = null!;
         warning = null;
 
-        // Normalise: accept both '_' and '.' as separators (compat).
-        // Strategy: replace '.' with '_' only in the numeric prefix part.
-        // Simplest: treat '.' as an alternate separator throughout the stem.
-        var tokens = stem.Split(new[] { '_', '.' });
-
+        // Extract a bracketed slug from the whole stem before separator tokenization so a slug may
+        // itself contain '_' or '.'. Only the prefix before '[' participates in numeric parsing.
+        var numericPrefix = stem;
         var nums = new List<int>();
         string? slug = null;
-        bool foundOpenBracket = false;
+        var openBracket = stem.IndexOf('[');
+        if (openBracket >= 0)
+        {
+            numericPrefix = stem[..openBracket];
+            var closeBracket = stem.IndexOf(']', openBracket + 1);
+            if (closeBracket < 0)
+            {
+                var invalidSegment = stem[openBracket..];
+                warning = new LoaderWarning(
+                    LoaderWarningKind.InvalidTag,
+                    $"Filename segment '{invalidSegment}' has an opening '[' but no valid closing ']'.");
+            }
+            else
+            {
+                slug = stem[openBracket..(closeBracket + 1)];
+            }
+        }
+
+        // Accept both '_' and '.' as separators for the numeric prefix (compatibility).
+        var tokens = numericPrefix.Split(new[] { '_', '.' });
 
         foreach (var token in tokens)
         {
             if (token.Length == 0) continue;
 
-            if (token.StartsWith('['))
-            {
-                // Check for missing closing bracket
-                if (!token.EndsWith(']') || token.Length < 2)
-                {
-                    warning = new LoaderWarning(
-                        LoaderWarningKind.InvalidTag,
-                        $"Filename segment '{token}' has an opening '[' but no valid closing ']'.");
-                    foundOpenBracket = true;
-                    break;
-                }
-
-                slug = token; // keep brackets: "[kunden]"
-                break;        // everything after slug is description
-            }
-
-            if (int.TryParse(token, out var n))
+            if (int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
             {
                 if (nums.Count < 3)
                     nums.Add(n);
@@ -150,12 +151,6 @@ public sealed class StepLoader
                 // Non-numeric, non-bracket → description start
                 break;
             }
-        }
-
-        if (foundOpenBracket && warning is not null)
-        {
-            // Still try to build partial order if we have enough segments
-            if (nums.Count < 2) return false;
         }
 
         if (nums.Count < 2)
@@ -171,6 +166,25 @@ public sealed class StepLoader
             Slug: slug);
 
         return true;
+    }
+
+    private static StepMeta ReadMetaOrDefault(string path)
+    {
+        if (!Path.Exists(path))
+            return StepMeta.Default;
+
+        try
+        {
+            return StepMeta.Parse(File.ReadAllText(path));
+        }
+        catch (IOException)
+        {
+            return StepMeta.Default;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return StepMeta.Default;
+        }
     }
 
     // ── post-sort validation ─────────────────────────────────────────────────

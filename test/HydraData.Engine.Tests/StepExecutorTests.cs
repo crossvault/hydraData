@@ -14,11 +14,15 @@ namespace HydraData.Engine.Tests;
 [Collection(ConsoleCaptureCollection.Name)]
 public sealed class StepExecutorTests
 {
-    private static (StepExecutor executor, FakeConnectionGateway gateway, EngineScaffold scaffold) New()
+    private static (StepExecutor executor, FakeConnectionGateway gateway, EngineScaffold scaffold) New(
+        bool allowUnsafeDirectAccess = false)
     {
         var scaffold = new EngineScaffold();
         var gateway = new FakeConnectionGateway();
-        var options = new PumpOptions(scaffold.WorkspaceBase, PumpFolderPolicy.Empty);
+        var options = new PumpOptions(
+            scaffold.WorkspaceBase,
+            PumpFolderPolicy.Empty,
+            AllowUnsafeDirectAccess: allowUnsafeDirectAccess);
         var workspace = new Workspace(scaffold.WorkspaceBase, Guid.NewGuid(), options.Folders);
         var executor = new StepExecutor(options, new ScriptCompiler(), gateway, TimeProvider.System, workspace);
         return (executor, gateway, scaffold);
@@ -81,6 +85,46 @@ public sealed class StepExecutorTests
             Assert.True(halt); // @haltOnError defaults to true
             Assert.Equal(1, gateway.Slots[0].Rollbacks);
             Assert.Equal(0, gateway.Slots[0].Commits);
+        }
+    }
+
+    [Fact]
+    public async Task Unsafe_step_can_call_Raw_when_engine_also_grants_access()
+    {
+        // Coverage-only: locks the existing StepExecutor dual-consent wiring end-to-end.
+        var (executor, _, scaffold) = New(allowUnsafeDirectAccess: true);
+        using (scaffold)
+        {
+            scaffold.AddStep("01_10_unsafe.cs", "// @unsafe: true\nRaw(); return Ok();");
+            var step = Discover(scaffold, "01_10_unsafe.cs");
+
+            var (result, halt) = await Run(executor, step, TestContext.Current.CancellationToken);
+
+            Assert.True(result.Ran);
+            Assert.True(result.Committed);
+            Assert.Equal(Severity.Success, result.EffectiveSeverity);
+            Assert.False(halt);
+        }
+    }
+
+    [Fact]
+    public async Task Unsafe_step_calling_Raw_without_engine_grant_is_runtime_error()
+    {
+        // Coverage-only defensive runtime gate; normal batch execution rejects this earlier as PUMP010.
+        var (executor, _, scaffold) = New(allowUnsafeDirectAccess: false);
+        using (scaffold)
+        {
+            scaffold.AddStep("01_10_unsafe.cs", "// @unsafe: true\nRaw(); return Ok();");
+            var step = Discover(scaffold, "01_10_unsafe.cs");
+
+            var (result, halt) = await Run(executor, step, TestContext.Current.CancellationToken);
+
+            Assert.True(result.Ran);
+            Assert.False(result.Committed);
+            Assert.Equal(Severity.Error, result.EffectiveSeverity);
+            Assert.NotNull(result.Result);
+            Assert.Contains("Raw access requires", result.Result!.Message, StringComparison.Ordinal);
+            Assert.True(halt);
         }
     }
 }
