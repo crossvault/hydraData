@@ -17,18 +17,27 @@ namespace HydraData.Host;
 public sealed class RunDirRetention
 {
     private readonly ILogger _logger;
+    private readonly Action<string, bool> _deleteDirectory;
 
     /// <summary>Creates a retention cleaner.</summary>
     /// <param name="logger">Diagnostic logger.</param>
     public RunDirRetention(ILogger logger)
+        : this(logger, Directory.Delete)
+    {
+    }
+
+    internal RunDirRetention(ILogger logger, Action<string, bool> deleteDirectory)
     {
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(deleteDirectory);
         _logger = logger;
+        _deleteDirectory = deleteDirectory;
     }
 
     /// <summary>
-    /// Deletes every run directory directly under <paramref name="workspaceBase"/> last written before
-    /// <paramref name="cutoff"/>. Newer folders are kept. Missing workspace base is a no-op.
+    /// Deletes every GUID-D-named run directory directly under <paramref name="workspaceBase"/> last written
+    /// before <paramref name="cutoff"/>. Newer folders and non-run directories are kept. Missing workspace
+    /// base is a no-op.
     /// </summary>
     /// <param name="workspaceBase">The base directory whose child run folders are cleaned.</param>
     /// <param name="cutoff">Folders last written strictly before this instant are deleted.</param>
@@ -47,6 +56,9 @@ public sealed class RunDirRetention
         var deleted = 0;
         foreach (var dir in Directory.EnumerateDirectories(workspaceBase))
         {
+            if (!Guid.TryParseExact(Path.GetFileName(dir), "D", out _))
+                continue;
+
             // Use the last write time of the run folder itself; a run writes into it during execution, so
             // its mtime tracks the run's recency without parsing the RunId.
             var lastWrite = new DateTimeOffset(Directory.GetLastWriteTimeUtc(dir), TimeSpan.Zero);
@@ -55,7 +67,7 @@ public sealed class RunDirRetention
 
             try
             {
-                Directory.Delete(dir, recursive: true);
+                _deleteDirectory(dir, true);
                 deleted++;
                 _logger.LogInformation("Retention: deleted run directory '{RunDir}' (last write {LastWrite:o}).", dir, lastWrite);
             }

@@ -45,22 +45,70 @@ public class HostBootstrapTests : IDisposable
         File.WriteAllText(Path.Combine(scriptDir, fileName), body);
     }
 
+    private string MakeOldRunDir()
+    {
+        var runDir = Path.Combine(_baseDir, "_runs", Guid.NewGuid().ToString("D"));
+        Directory.CreateDirectory(runDir);
+        File.WriteAllText(Path.Combine(runDir, "marker.txt"), "old");
+        Directory.SetLastWriteTimeUtc(runDir, DateTime.UtcNow.AddDays(-30));
+        return runDir;
+    }
+
+    private string[] GetGuidRunDirs()
+    {
+        var runsDir = Path.Combine(_baseDir, "_runs");
+        return Directory.Exists(runsDir)
+            ? Directory.GetDirectories(runsDir)
+                .Where(dir => Guid.TryParseExact(Path.GetFileName(dir), "D", out _))
+                .ToArray()
+            : [];
+    }
+
     [Fact]
-    public async Task Happy_path_runs_and_returns_exit_0()
+    public async Task Retention_enabled_deletes_old_guid_run_and_creates_new_run()
     {
         WriteAppSettings();
         WriteConnections();
         AddScript("01_10_a.cs", "return Ok();");
+        var oldRunDir = MakeOldRunDir();
 
         var exit = await HostBootstrap.RunAsync(_baseDir, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exit);
-        // A durable host log is written inside the run's RunDir (so RunDirRetention reaps it).
-        // The RunId is a GUID; find the run directory and verify host.log lives inside it.
-        var runsDir = Path.Combine(_baseDir, "_runs");
-        var runDirs = Directory.GetDirectories(runsDir);
-        var hostLog = runDirs.SelectMany(d => Directory.GetFiles(d, "host.log")).FirstOrDefault();
-        Assert.NotNull(hostLog);
+        Assert.False(Directory.Exists(oldRunDir));
+        Assert.Single(GetGuidRunDirs());
+    }
+
+    [Fact]
+    public async Task Zero_retention_days_preserves_old_guid_run_and_creates_new_run()
+    {
+        WriteAppSettings(retentionDays: 0);
+        WriteConnections();
+        AddScript("01_10_a.cs", "return Ok();");
+        var oldRunDir = MakeOldRunDir();
+
+        var exit = await HostBootstrap.RunAsync(_baseDir, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exit);
+        Assert.True(Directory.Exists(oldRunDir));
+        Assert.Equal(2, GetGuidRunDirs().Length);
+    }
+
+    [Fact]
+    public async Task Run_id_alignment_places_host_log_and_engine_artifact_in_one_guid_run_dir()
+    {
+        WriteAppSettings();
+        WriteConnections();
+        AddScript(
+            "01_10_artifact.cs",
+            "WriteCsv(\"engine-artifact.csv\", new object[] { new { Value = 1 } }); return Ok();");
+
+        var exit = await HostBootstrap.RunAsync(_baseDir, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exit);
+        var runDir = Assert.Single(GetGuidRunDirs());
+        Assert.True(File.Exists(Path.Combine(runDir, "host.log")));
+        Assert.True(File.Exists(Path.Combine(runDir, "engine-artifact.csv")));
     }
 
     [Fact]

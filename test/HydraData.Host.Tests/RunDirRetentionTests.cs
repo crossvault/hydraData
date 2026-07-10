@@ -30,12 +30,14 @@ public class RunDirRetentionTests : IDisposable
         return dir;
     }
 
+    private static string NewRunId() => Guid.NewGuid().ToString("D");
+
     [Fact]
     public void Deletes_only_folders_older_than_cutoff()
     {
         var cutoff = new DateTimeOffset(2026, 06, 24, 0, 0, 0, TimeSpan.Zero);
-        var old = MakeRunDir("old-run", cutoff.AddDays(-5));
-        var fresh = MakeRunDir("fresh-run", cutoff.AddDays(+1));
+        var old = MakeRunDir(NewRunId(), cutoff.AddDays(-5));
+        var fresh = MakeRunDir(NewRunId(), cutoff.AddDays(+1));
 
         var deleted = _retention.CleanOlderThan(_workspace, cutoff);
 
@@ -48,7 +50,7 @@ public class RunDirRetentionTests : IDisposable
     public void Keeps_folder_exactly_at_cutoff()
     {
         var cutoff = new DateTimeOffset(2026, 06, 24, 0, 0, 0, TimeSpan.Zero);
-        var atCutoff = MakeRunDir("edge-run", cutoff);
+        var atCutoff = MakeRunDir(NewRunId(), cutoff);
 
         var deleted = _retention.CleanOlderThan(_workspace, cutoff);
 
@@ -69,8 +71,8 @@ public class RunDirRetentionTests : IDisposable
     {
         var now = new DateTimeOffset(2026, 06, 24, 12, 0, 0, TimeSpan.Zero);
         var clock = new FakeTimeProvider(now);
-        var old = MakeRunDir("old", now.AddDays(-20));
-        var recent = MakeRunDir("recent", now.AddDays(-2));
+        var old = MakeRunDir(NewRunId(), now.AddDays(-20));
+        var recent = MakeRunDir(NewRunId(), now.AddDays(-2));
 
         var deleted = _retention.CleanOlderThanDays(_workspace, retentionDays: 14, timeProvider: clock);
 
@@ -82,7 +84,7 @@ public class RunDirRetentionTests : IDisposable
     [Fact]
     public void Zero_retention_days_disables_cleanup()
     {
-        var old = MakeRunDir("old", DateTimeOffset.UtcNow.AddDays(-100));
+        var old = MakeRunDir(NewRunId(), DateTimeOffset.UtcNow.AddDays(-100));
 
         var deleted = _retention.CleanOlderThanDays(_workspace, retentionDays: 0);
 
@@ -91,23 +93,73 @@ public class RunDirRetentionTests : IDisposable
     }
 
     [Fact]
+    public void Old_non_guid_directory_survives_and_is_not_counted()
+    {
+        var cutoff = new DateTimeOffset(2026, 06, 24, 0, 0, 0, TimeSpan.Zero);
+        var nonRunDirectory = MakeRunDir("scripts", cutoff.AddDays(-30));
+
+        var deleted = _retention.CleanOlderThan(_workspace, cutoff);
+
+        Assert.Equal(0, deleted);
+        Assert.True(Directory.Exists(nonRunDirectory));
+    }
+
+    [Fact]
+    public void IOException_from_delete_is_skipped_and_other_eligible_run_is_deleted()
+    {
+        var cutoff = new DateTimeOffset(2026, 06, 24, 0, 0, 0, TimeSpan.Zero);
+        var blocked = MakeRunDir(NewRunId(), cutoff.AddDays(-5));
+        var deletable = MakeRunDir(NewRunId(), cutoff.AddDays(-6));
+        var fresh = MakeRunDir(NewRunId(), cutoff.AddDays(+1));
+        var attempted = new List<string>();
+        var retention = new RunDirRetention(
+            NullLogger.Instance,
+            (path, recursive) =>
+            {
+                Assert.True(recursive);
+                attempted.Add(path);
+                if (path == blocked)
+                    throw new IOException("deterministic delete failure");
+
+                Directory.Delete(path, recursive);
+            });
+
+        var deleted = retention.CleanOlderThan(_workspace, cutoff);
+
+        Assert.Equal(1, deleted);
+        Assert.True(Directory.Exists(blocked));
+        Assert.False(Directory.Exists(deletable));
+        Assert.True(Directory.Exists(fresh));
+        Assert.Contains(blocked, attempted);
+        Assert.Contains(deletable, attempted);
+        Assert.DoesNotContain(fresh, attempted);
+    }
+
+    [Fact]
     public void Locked_run_directory_is_skipped_best_effort_and_others_are_deleted()
     {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "FileShare.None blocks deletion only on Windows.");
+
         // A run directory holding an open file with FileShare.None cannot be deleted (Windows). Retention
         // must NOT throw on it: it logs and moves on, leaving the locked dir intact and uncounted, while the
         // other old directories ARE deleted. Proves the IOException/UnauthorizedAccessException best-effort
         // guard in CleanOlderThan.
         var cutoff = new DateTimeOffset(2026, 06, 24, 0, 0, 0, TimeSpan.Zero);
 
-        var lockedDir = MakeRunDir("locked-run", cutoff.AddDays(-5));
-        var otherOld1 = MakeRunDir("old-run-1", cutoff.AddDays(-6));
-        var otherOld2 = MakeRunDir("old-run-2", cutoff.AddDays(-7));
-        var fresh = MakeRunDir("fresh-run", cutoff.AddDays(+1));
+        var lockedLastWrite = cutoff.AddDays(-5);
+        var lockedDir = MakeRunDir(NewRunId(), lockedLastWrite);
+        var otherOld1 = MakeRunDir(NewRunId(), cutoff.AddDays(-6));
+        var otherOld2 = MakeRunDir(NewRunId(), cutoff.AddDays(-7));
+        var fresh = MakeRunDir(NewRunId(), cutoff.AddDays(+1));
 
         // Hold a file open with NO sharing so Directory.Delete(recursive) on the locked dir fails.
         var lockPath = Path.Combine(lockedDir, "held.lock");
         using (var held = new FileStream(lockPath, FileMode.Create, FileAccess.Write, FileShare.None))
         {
+            // Creating the lock file refreshes the directory mtime. Restore the old timestamp so retention
+            // reaches Directory.Delete and exercises its best-effort IOException handling.
+            Directory.SetLastWriteTimeUtc(lockedDir, lockedLastWrite.UtcDateTime);
+
             var deleted = _retention.CleanOlderThan(_workspace, cutoff);
 
             // Only the two unlocked old dirs were deletable; the locked one is skipped (not counted).
