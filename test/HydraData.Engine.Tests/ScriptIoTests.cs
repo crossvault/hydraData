@@ -1,5 +1,6 @@
 // Copyright (c) 2026 crossVault GmbH.
 
+using DuckDB.NET.Data;
 using MiniExcelLibs;
 using Xunit;
 
@@ -455,7 +456,7 @@ public sealed class ScriptIoTests : IDisposable
         // DuckDB surfaces the disabled-external-access guard as a "Permission Error: ... file system
         // operations are disabled by configuration". Assert that category specifically so a broken/typo'd
         // query (which DuckDB reports as a Parser/Binder/Catalog Error) cannot make this pass green.
-        var ex = Assert.ThrowsAny<Exception>(() => io.Analyze(sql));
+        var ex = Assert.Throws<DuckDBException>(() => io.Analyze(sql));
         Assert.Contains("Permission Error", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -486,7 +487,7 @@ public sealed class ScriptIoTests : IDisposable
         using var db = io.Duck();
         var sql = $"SELECT * FROM read_csv('{secret.Replace("\\", "/")}');";
 
-        var ex = Assert.ThrowsAny<Exception>(() => db.Query(sql));
+        var ex = Assert.Throws<DuckDBException>(() => db.Query(sql));
         Assert.Contains("Permission Error", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -504,7 +505,7 @@ public sealed class ScriptIoTests : IDisposable
         using var db = io.Duck("persisted");
         var sql = $"SELECT * FROM read_csv('{secret.Replace("\\", "/")}');";
 
-        var ex = Assert.ThrowsAny<Exception>(() => db.Query(sql));
+        var ex = Assert.Throws<DuckDBException>(() => db.Query(sql));
         Assert.Contains("Permission Error", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -517,14 +518,14 @@ public sealed class ScriptIoTests : IDisposable
 
         using (var setHandle = io.Duck())
         {
-            var ex = Assert.ThrowsAny<Exception>(() =>
+            var ex = Assert.Throws<DuckDBException>(() =>
                 setHandle.Execute("SET enable_external_access=true;"));
             Assert.Contains("external access", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
 
         using (var resetHandle = io.Duck())
         {
-            var ex = Assert.ThrowsAny<Exception>(() =>
+            var ex = Assert.Throws<DuckDBException>(() =>
                 resetHandle.Execute("RESET enable_external_access;"));
             Assert.Contains("external access", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
@@ -532,7 +533,7 @@ public sealed class ScriptIoTests : IDisposable
         using (var readHandle = io.Duck())
         {
             var sql = $"SELECT * FROM read_csv('{secret.Replace("\\", "/")}');";
-            var ex = Assert.ThrowsAny<Exception>(() => readHandle.Query(sql));
+            var ex = Assert.Throws<DuckDBException>(() => readHandle.Query(sql));
             Assert.Contains("Permission Error", ex.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("disabled by configuration", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
