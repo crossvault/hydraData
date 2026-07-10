@@ -55,6 +55,9 @@ public static partial class Fn
     /// <summary>
     /// Multi-branch conditional — returns the value of the first case whose condition is
     /// <see langword="true"/>; if no case matches, returns <paramref name="elseValue"/>.
+    /// All case values are evaluated eagerly before this method is called, including values
+    /// belonging to non-selected cases. Do not put unsafe dereferences or avoidable side effects
+    /// in case values.
     /// <para>
     /// <paramref name="elseValue"/> is mandatory: a silent <c>default(T)</c> on a missed case
     /// would violate "null behaviour never silently ignored".
@@ -124,6 +127,8 @@ public static partial class Fn
     /// For nullable types, a null/empty/whitespace <paramref name="text"/> returns
     /// <paramref name="fallback"/> (not <see langword="null"/> unless <paramref name="fallback"/>
     /// itself is <see langword="null"/>).
+    /// <see cref="DateTime"/> results are normalized to UTC: explicit offsets are adjusted to
+    /// their UTC instant, and offset-less input is assumed to already be UTC.
     /// </para>
     /// </summary>
     /// <typeparam name="T">Target type.</typeparam>
@@ -175,7 +180,13 @@ public static partial class Fn
             return Guid.TryParse(trimmed, out var g) ? g : fallback;
 
         if (type == typeof(DateTime))
-            return DateTime.TryParse(trimmed, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt) ? dt : fallback;
+            return DateTime.TryParse(
+                trimmed,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var dt)
+                ? dt
+                : fallback;
 
         throw new NotSupportedException(
             $"parseOr<T> does not support type '{type.FullName}'. " +

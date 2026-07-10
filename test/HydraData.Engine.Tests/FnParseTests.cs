@@ -168,6 +168,20 @@ public class FnParseTests
     }
 
     [Theory]
+    [InlineData("2024-06-15T12:00:00Z", 12)]
+    [InlineData("2024-06-15T12:00:00+02:00", 10)]
+    [InlineData("2024-06-15T12:00:00", 12)]
+    public void ParseOr_datetime_normalizes_to_UTC(string input, int expectedHour)
+    {
+        var result = parseOr<DateTime>(input, DateTime.MinValue);
+
+        Assert.Equal(
+            new DateTime(2024, 6, 15, expectedHour, 0, 0, DateTimeKind.Utc),
+            result);
+        Assert.Equal(DateTimeKind.Utc, result.Kind);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("nope")]

@@ -40,8 +40,15 @@ public sealed class ExternContext
     {
         ArgumentNullException.ThrowIfNull(values);
 
+        var keys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in values)
         {
+            if (keys.TryGetValue(key, out var existingKey))
+                throw new ArgumentException(
+                    $"ExternContext: key '{key}' has a case-insensitive collision with key '{existingKey}'.",
+                    nameof(values));
+            keys.Add(key, key);
+
             if (value is null) continue;
 
             var type = value.GetType();
@@ -95,7 +102,8 @@ public sealed class ExternContext
         if (raw is null) return default;
         if (raw is T direct) return direct;
 
-        var target = typeof(T);
+        var declaredTarget = typeof(T);
+        var target = Nullable.GetUnderlyingType(declaredTarget) ?? declaredTarget;
         var ic = CultureInfo.InvariantCulture;
 
         try

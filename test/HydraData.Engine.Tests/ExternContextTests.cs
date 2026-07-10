@@ -151,6 +151,30 @@ public class ExternContextTests
         Assert.Throws<InvalidCastException>(() => ctx.Get<decimal>("d"));
     }
 
+    [Fact]
+    public void Get_nullable_int_coerces_using_underlying_type()
+    {
+        var ctx = ExternContext.FromValues(new Dictionary<string, object?> { ["n"] = 42L });
+
+        Assert.Equal((int?)42, ctx.Get<int?>("n"));
+    }
+
+    [Fact]
+    public void Get_nullable_decimal_coerces_using_underlying_type()
+    {
+        var ctx = ExternContext.FromValues(new Dictionary<string, object?> { ["n"] = "1.23" });
+
+        Assert.Equal((decimal?)1.23m, ctx.Get<decimal?>("n"));
+    }
+
+    [Fact]
+    public void Get_nullable_enum_coerces_using_underlying_type()
+    {
+        var ctx = ExternContext.FromValues(new Dictionary<string, object?> { ["severity"] = "warning" });
+
+        Assert.Equal((Severity?)Severity.Warning, ctx.Get<Severity?>("severity"));
+    }
+
     // ── Require<T> ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -183,6 +207,23 @@ public class ExternContextTests
         var ctx = ExternContext.FromValues(new Dictionary<string, object?> { ["BatchDate"] = "2026-01-01" });
         Assert.Equal("2026-01-01", ctx.Get<string>("batchdate"));
         Assert.Equal("2026-01-01", ctx.Get<string>("BATCHDATE"));
+    }
+
+    [Fact]
+    public void FromValues_case_insensitive_duplicate_names_the_collision()
+    {
+        var values = new Dictionary<string, object?>
+        {
+            ["BatchDate"] = "2026-01-01",
+            ["batchdate"] = "2026-01-02",
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => ExternContext.FromValues(values));
+
+        Assert.Contains("ExternContext", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("BatchDate", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("batchdate", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("collision", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── FromValues(null) ─────────────────────────────────────────────────────

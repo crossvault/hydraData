@@ -128,4 +128,47 @@ public sealed class AsciiTableTests
         var headerRow = lines[1];
         Assert.Equal(3, headerRow.Count(c => c == '|'));
     }
+
+    [Fact]
+    public void Pipe_and_newline_in_headers_are_sanitized_without_losing_original_key_lookup()
+    {
+        var rows = new object[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["a|b"] = "first",
+                ["l1\nl2"] = "second",
+            },
+        };
+
+        var actual = AsciiTable.Render(rows);
+        var lines = actual.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Contains("a│b", lines[1]);
+        Assert.Contains("l1 l2", lines[1]);
+        Assert.Equal(3, lines[1].Count(c => c == '|'));
+        Assert.Contains("first", lines[3]);
+        Assert.Contains("second", lines[3]);
+    }
+
+    [Fact]
+    public void Null_rows_and_inconsistent_key_sets_follow_first_row_schema_and_stay_well_formed()
+    {
+        var rows = new object?[]
+        {
+            new { A = "one", B = "two" },
+            null,
+            new Dictionary<string, object?> { ["A"] = "three", ["C"] = "ignored" },
+        };
+
+        var actual = AsciiTable.Render(rows!);
+        var lines = actual.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(7, lines.Length);
+        Assert.All(lines, line => Assert.Equal(lines[0].Length, line.Length));
+        Assert.DoesNotContain(lines[4], c => c is not ('|' or ' '));
+        Assert.Contains("three", lines[5]);
+        Assert.DoesNotContain("ignored", actual);
+        Assert.DoesNotContain(" C ", lines[1]);
+    }
 }

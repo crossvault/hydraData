@@ -1,5 +1,6 @@
 // Copyright (c) 2026 crossVault GmbH.
 
+using MiniExcelLibs;
 using Xunit;
 
 namespace HydraData.Engine.Tests;
@@ -114,6 +115,50 @@ public sealed class ScriptIoTests : IDisposable
     }
 
     [Fact]
+    public void WriteCsv_with_no_rows_creates_an_exactly_empty_file()
+    {
+        var workspace = NewWorkspace();
+        var io = new ScriptIo(workspace, engineAllowsUnsafe: false, scriptDeclaresUnsafe: false);
+
+        io.WriteCsv("empty.csv", []);
+
+        Assert.Equal(string.Empty, File.ReadAllText(Path.Combine(workspace.RunDir, "empty.csv")));
+    }
+
+    [Fact]
+    public void WriteCsv_uses_first_row_schema_and_drops_later_extra_columns()
+    {
+        var io = NewIo();
+        var rows = new object[]
+        {
+            new Dictionary<string, object?> { ["A"] = "one", ["B"] = "two" },
+            new Dictionary<string, object?> { ["A"] = "three", ["B"] = "four", ["C"] = "ignored" },
+        };
+
+        io.WriteCsv("schema.csv", rows);
+        var back = io.ReadCsv("schema.csv");
+
+        Assert.Equal(2, back.Count);
+        var second = Assert.IsAssignableFrom<IDictionary<string, object?>>((object)back[1]);
+        Assert.Equal("three", second["A"]);
+        Assert.Equal("four", second["B"]);
+        Assert.DoesNotContain("C", second.Keys);
+    }
+
+    [Fact]
+    public void WriteCsv_roundtrips_UTF8_text()
+    {
+        var io = NewIo();
+
+        io.WriteCsv("utf8.csv", [new { Name = "Müller", Address = "Hauptstraße" }]);
+        var back = io.ReadCsv("utf8.csv");
+
+        var row = Assert.IsAssignableFrom<IDictionary<string, object?>>((object)Assert.Single(back));
+        Assert.Equal("Müller", row["Name"]);
+        Assert.Equal("Hauptstraße", row["Address"]);
+    }
+
+    [Fact]
     public void ReadCsv_outside_allowlist_throws()
     {
         var outside = Path.Combine(_baseDir, "secret.csv");
@@ -204,6 +249,30 @@ public sealed class ScriptIoTests : IDisposable
                 (w, r) => w.Format("A", r.A)));
     }
 
+    [Fact]
+    public void WriteCsvFast_inconsistent_columns_throw_after_committing_known_columns_from_failing_row()
+    {
+        var workspace = NewWorkspace();
+        var io = new ScriptIo(workspace, engineAllowsUnsafe: false, scriptDeclaresUnsafe: false);
+
+        Assert.Throws<KeyNotFoundException>(() =>
+            io.WriteCsvFast(
+                "partial.csv",
+                ["first", "second"],
+                (writer, value) =>
+                {
+                    writer.Set("A", value);
+                    if (value == "second")
+                        writer.Set("B", "new-column");
+                }));
+
+        var partial = File.ReadAllText(Path.Combine(workspace.RunDir, "partial.csv"));
+        Assert.Equal(
+            ["A", "first", "second"],
+            partial.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries));
+        Assert.DoesNotContain("new-column", partial, StringComparison.Ordinal);
+    }
+
     // ── Excel roundtrip + sandbox (T05.4) ────────────────────────────────────────
 
     [Fact]
@@ -222,6 +291,56 @@ public sealed class ScriptIoTests : IDisposable
         Assert.Equal(2, back.Count);
         var first = (IDictionary<string, object?>)back[0];
         Assert.Equal("Alice", first["Name"]?.ToString());
+    }
+
+    [Fact]
+    public void WriteExcel_renders_rows_with_a_template()
+    {
+        var template = Path.Combine(_inputDir, "template.xlsx");
+        MiniExcel.SaveAs(template, new[] { new { Name = "{{rows.Name}}" } });
+        var io = NewIo();
+
+        io.WriteExcel(
+            "templated.xlsx",
+            [new { Name = "Müller" }, new { Name = "Schmidt" }],
+            template);
+
+        var back = io.ReadExcel("templated.xlsx");
+        Assert.Equal(
+            ["Müller", "Schmidt"],
+            back.Select(row => ((IDictionary<string, object?>)row)["Name"]?.ToString()!).ToArray());
+    }
+
+    [Fact]
+    public void WriteExcel_rejects_a_template_outside_the_read_allowlist()
+    {
+        var template = Path.Combine(_baseDir, "outside-template.xlsx");
+        MiniExcel.SaveAs(template, new[] { new { Name = "{{rows.Name}}" } });
+        var io = NewIo();
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
+            io.WriteExcel("blocked.xlsx", [new { Name = "Alice" }], template));
+    }
+
+    [Fact]
+    public void ReadExcel_reads_a_named_sheet_and_missing_sheet_throws()
+    {
+        var workbook = Path.Combine(_inputDir, "sheets.xlsx");
+        MiniExcel.SaveAs(
+            workbook,
+            new Dictionary<string, object>
+            {
+                ["Sheet1"] = new[] { new { Name = "first" } },
+                ["Sheet2"] = new[] { new { Name = "second" } },
+            });
+        var io = NewIo();
+
+        var rows = io.ReadExcel(workbook, "Sheet2");
+
+        var row = Assert.IsAssignableFrom<IDictionary<string, object?>>((object)Assert.Single(rows));
+        Assert.Equal("second", row["Name"]?.ToString());
+        var ex = Assert.Throws<InvalidOperationException>(() => io.ReadExcel(workbook, "Missing"));
+        Assert.Contains("sheetName/Index", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -277,10 +396,26 @@ public sealed class ScriptIoTests : IDisposable
     [InlineData("a\\b")]
     [InlineData("..")]
     [InlineData("C:evil")]
+    [InlineData("a b")]
+    [InlineData("evil.")]
     public void Duck_named_rejects_path_or_traversal(string name)
     {
         var io = NewIo();
         Assert.Throws<ArgumentException>(() => io.Duck(name));
+    }
+
+    [Fact]
+    public void Duck_named_duckdb_suffix_is_idempotent()
+    {
+        var workspace = NewWorkspace();
+        var io = new ScriptIo(workspace, engineAllowsUnsafe: false, scriptDeclaresUnsafe: false);
+
+        using (io.Duck("pre.duckdb"))
+        {
+        }
+
+        Assert.True(File.Exists(Path.Combine(workspace.Duck, "pre.duckdb")));
+        Assert.False(File.Exists(Path.Combine(workspace.Duck, "pre.duckdb.duckdb")));
     }
 
     [Fact]
@@ -371,6 +506,36 @@ public sealed class ScriptIoTests : IDisposable
 
         var ex = Assert.ThrowsAny<Exception>(() => db.Query(sql));
         Assert.Contains("Permission Error", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Duck_safemode_external_access_cannot_be_reenabled_or_reset()
+    {
+        var secret = Path.Combine(_baseDir, "still-secret.csv");
+        File.WriteAllText(secret, "k\n1\n");
+        var io = NewIo(engineUnsafe: false, scriptUnsafe: false);
+
+        using (var setHandle = io.Duck())
+        {
+            var ex = Assert.ThrowsAny<Exception>(() =>
+                setHandle.Execute("SET enable_external_access=true;"));
+            Assert.Contains("external access", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using (var resetHandle = io.Duck())
+        {
+            var ex = Assert.ThrowsAny<Exception>(() =>
+                resetHandle.Execute("RESET enable_external_access;"));
+            Assert.Contains("external access", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using (var readHandle = io.Duck())
+        {
+            var sql = $"SELECT * FROM read_csv('{secret.Replace("\\", "/")}');";
+            var ex = Assert.ThrowsAny<Exception>(() => readHandle.Query(sql));
+            Assert.Contains("Permission Error", ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("disabled by configuration", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     // ── Excel streaming (T05.4) ──────────────────────────────────────────────────

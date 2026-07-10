@@ -85,6 +85,19 @@ public class FnConditionalTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public void Icase_evaluates_all_branch_values_eagerly()
+    {
+        var sideEffect = 0;
+
+        var result = icase(0,
+            (true, ++sideEffect),
+            (false, ++sideEffect));
+
+        Assert.Equal(1, result);
+        Assert.Equal(2, sideEffect);
+    }
+
     // ---- coalesce ----
 
     [Fact]

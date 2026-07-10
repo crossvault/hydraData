@@ -53,6 +53,10 @@ Scripts koennen diese Helfer direkt aufrufen:
 `State` gilt fuer die aktuelle Gruppe. `Shared` ist im gesamten Run sichtbar.
 `Ctx` enthaelt read-only Werte aus der einbettenden Anwendung.
 
+`parseOr<DateTime>` liefert bei Erfolg immer UTC. Eingaben mit `Z` oder einem
+expliziten Offset werden auf ihren UTC-Zeitpunkt umgerechnet; Eingaben ohne Offset
+werden als UTC angenommen. Das resultierende `DateTime.Kind` ist `Utc`.
+
 ## Cancellation
 
 Lange Schleifen muessen den Cancellation-Token beachten:

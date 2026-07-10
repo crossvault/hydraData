@@ -189,6 +189,18 @@ public sealed class DiscoveryServiceTests : IDisposable
     }
 
     [Fact]
+    public void ScriptContext_Groups_is_not_castable_to_mutable_List()
+    {
+        var source = new List<int> { 1, 2 };
+        var ctx = new ScriptContext(source, [], []);
+
+        Assert.IsNotType<List<int>>(ctx.Groups);
+        var list = Assert.IsAssignableFrom<IList<int>>(ctx.Groups);
+        Assert.Throws<NotSupportedException>(() => list.Add(3));
+        Assert.Equal([1, 2], ctx.Groups);
+    }
+
+    [Fact]
     public void ScriptContext_Steps_is_IReadOnlyList()
     {
         var dir = MakeDir(("01_10_step.cs", "return Ok();"));

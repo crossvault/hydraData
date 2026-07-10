@@ -90,7 +90,9 @@ public sealed class ScriptCompiler
         }
         catch
         {
-            _cache.TryRemove(code, out _);
+            // Remove only the exact code/Lazy pair that faulted. A key-only removal could evict a
+            // healthy replacement installed by another thread after this caller observed the failure.
+            _cache.TryRemove(KeyValuePair.Create(code, lazy));
             throw;
         }
     }

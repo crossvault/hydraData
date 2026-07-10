@@ -52,6 +52,10 @@ Scripts can call these helpers directly:
 `State` is scoped to the current group. `Shared` is visible across the run.
 `Ctx` contains read-only values supplied by the embedding application.
 
+`parseOr<DateTime>` always returns UTC on success. Inputs with `Z` or an explicit
+offset are adjusted to their UTC instant; offset-less inputs are assumed to already
+be UTC. The resulting `DateTime.Kind` is `Utc`.
+
 ## Cancellation
 
 Long loops must check the provided cancellation token:

@@ -30,8 +30,8 @@ public sealed class ScriptContext
         IReadOnlyList<StepDescriptor> steps,
         IReadOnlyList<LoaderWarning> warnings)
     {
-        Groups = groups;
         // Wrap in true read-only wrappers so callers cannot cast back to List<T> and mutate.
+        Groups = groups is List<int> gl ? gl.AsReadOnly() : groups;
         Steps = steps is List<StepDescriptor> sl ? sl.AsReadOnly() : steps;
         Warnings = warnings is List<LoaderWarning> wl ? wl.AsReadOnly() : warnings;
     }

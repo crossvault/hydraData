@@ -26,32 +26,36 @@ internal static class AsciiTable
 
         var materialised = rows.ToList();
         var maps = materialised.Select(ToMap).ToList();
-        var columns = DiscoverColumns(maps);
-        if (columns.Count == 0)
+        var originalColumns = DiscoverColumns(maps);
+        if (originalColumns.Count == 0)
             return string.Empty;
+
+        // Display headers use the same sanitization as cells, while dictionary lookup must retain
+        // the original keys so a sanitized header never changes which value is rendered.
+        var headers = originalColumns.Select(Stringify).ToList();
 
         // Build the cell matrix (header excluded); null -> empty cell.
         var cells = new List<string[]>(maps.Count);
         foreach (var map in maps)
         {
-            var rowCells = new string[columns.Count];
-            for (int c = 0; c < columns.Count; c++)
-                rowCells[c] = map.TryGetValue(columns[c], out var v) ? Stringify(v) : string.Empty;
+            var rowCells = new string[originalColumns.Count];
+            for (int c = 0; c < originalColumns.Count; c++)
+                rowCells[c] = map.TryGetValue(originalColumns[c], out var v) ? Stringify(v) : string.Empty;
             cells.Add(rowCells);
         }
 
         // Column widths = widest cell including the header.
-        var widths = new int[columns.Count];
-        for (int c = 0; c < columns.Count; c++)
+        var widths = new int[headers.Count];
+        for (int c = 0; c < headers.Count; c++)
         {
-            widths[c] = columns[c].Length;
+            widths[c] = headers[c].Length;
             foreach (var row in cells)
                 if (row[c].Length > widths[c]) widths[c] = row[c].Length;
         }
 
         var sb = new StringBuilder();
         AppendSeparator(sb, widths);
-        AppendRow(sb, columns.ToArray(), widths);
+        AppendRow(sb, headers.ToArray(), widths);
         AppendSeparator(sb, widths);
         foreach (var row in cells)
             AppendRow(sb, row, widths);
