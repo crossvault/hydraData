@@ -269,14 +269,42 @@ public class StepRunnerTests
         var (runner, gateway) = NewRunner(time);
         using var cts = new CancellationTokenSource();
 
+        var timeoutCancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCancellation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var shared = new PumpState();
+        shared.Set("timeoutCancellationObserved", timeoutCancellationObserved);
+        shared.Set("releaseCancellation", releaseCancellation.Task);
+
         const string code =
-            "Execute(\"x\"); await System.Threading.Tasks.Task.Delay(System.Threading.Timeout.Infinite, Cancellation); return Ok();";
+            "Execute(\"x\"); " +
+            "try { await Task.Delay(Timeout.Infinite, Cancellation); } " +
+            "catch (OperationCanceledException) { " +
+            "Shared.Require<TaskCompletionSource>(\"timeoutCancellationObserved\").SetResult(); " +
+            "await Shared.Require<Task>(\"releaseCancellation\"); throw; } " +
+            "return Ok();";
 
-        var runTask = Run(runner, code, cts.Token, timeout: TimeSpan.FromSeconds(5));
+        var runTask = runner.RunAsync(
+            code,
+            new PumpState(),
+            shared,
+            ExternContext.FromValues(new Dictionary<string, object?>()),
+            PumpContextFactory.DefaultConnection,
+            unsafeAllowed: false,
+            stepTimeout: TimeSpan.FromSeconds(5),
+            logger: null,
+            ct: cts.Token);
 
-        await gateway.WaitForSlotCountAsync(1, TestContext.Current.CancellationToken);
-        time.Advance(TimeSpan.FromSeconds(6));
-        cts.Cancel();
+        try
+        {
+            await gateway.WaitForSlotCountAsync(1, TestContext.Current.CancellationToken);
+            time.Advance(TimeSpan.FromSeconds(6));
+            await timeoutCancellationObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            cts.Cancel();
+            releaseCancellation.TrySetResult();
+        }
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runTask);
         Assert.Equal(0, gateway.Slots[0].Commits);
