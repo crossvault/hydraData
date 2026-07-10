@@ -57,11 +57,12 @@ public static class HostBootstrap
         // [B2] ALL configuration loading (appsettings.json read/bind + ToPumpOptions + path resolution) runs
         // INSIDE the outer try so a missing or malformed appsettings.json is caught and mapped to exit 1,
         // never escaping to Program.cs as an unguarded exception.
-        ILogger? logger = null;
         try
         {
+            ct.ThrowIfCancellationRequested();
+
             // Call ToPumpOptions once and reuse the result for both workspaceBase and the engine options.
-            // HostConfigLoader.Load also builds the connection directory (ConnectionRegistry.Load).
+            // HostConfigLoader.Load also parses the connection registry and retains its warnings.
             var config = HostConfigLoader.Load(baseDirectory);
             var options = config.Options;
             var workspaceBase = options.WorkspaceBase;
@@ -74,6 +75,9 @@ public static class HostBootstrap
             var runDir = Path.Combine(workspaceBase, runId.ToString("D"));
             var logPath = Path.Combine(runDir, "host.log");
 
+            // LoggerFactory does not own provider instances passed to AddProvider; dispose this explicitly
+            // after the factory so host.log is flushed/unlocked before RunAsync returns.
+            using var fileLoggerProvider = new FileLoggerProvider(logPath);
             using var loggerFactory = LoggerFactory.Create(builder =>
             {
                 builder.SetMinimumLevel(LogLevel.Information);
@@ -81,41 +85,45 @@ public static class HostBootstrap
                 // ConsolePresenter handles the human-facing progress/summary separately.
                 builder.AddSimpleConsole(o => o.SingleLine = true);
                 // File sink inside the run directory so RunDirRetention reaps it with the run.
-                builder.AddProvider(new FileLoggerProvider(logPath));
+                builder.AddProvider(fileLoggerProvider);
             });
 
-            logger = loggerFactory.CreateLogger("HydraData.Host");
+            var logger = loggerFactory.CreateLogger("HydraData.Host");
 
-            // Retention runs before the new run so an old, full workspace is trimmed first.
+            // Map every failure after logger creation while the factory and file sink are still alive.
             try
             {
-                new RunDirRetention(logger).CleanOlderThanDays(workspaceBase, config.Settings.RunDirRetentionDays);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Retention is best-effort housekeeping; never let it block the run.
-                logger.LogWarning(ex, "Retention pass failed; continuing with the run.");
-            }
+                foreach (var warning in config.Warnings)
+                    logger.LogWarning("connections.xml: {Warning}", warning.Message);
 
-            var engine = new PumpEngine(options, guidProvider: new FixedGuidProvider(runId), logger: logger);
-            var discovery = new DiscoveryService(new LoaderOptions
-            {
-                // Derive legacy flags from the already-resolved PumpOptions, not by re-reading settings.
-                LegacyGroupBySlug = options.LegacyGroupBySlug,
-                LegacyGlobalState = options.LegacyGlobalState,
-            });
-            var presenter = new ConsolePresenter();
+                var connections = new ConnectionDirectory(config.Registry);
 
-            // ExternContext is intentionally minimal in v1: no values are sourced from the CLI yet. Hosts that
-            // need batch-date/tenant inputs add them here from configuration or args.
-            var externCtx = ExternContext.FromValues(new Dictionary<string, object?>());
+                // Retention runs before the new run so an old, full workspace is trimmed first.
+                try
+                {
+                    new RunDirRetention(logger).CleanOlderThanDays(workspaceBase, config.Settings.RunDirRetentionDays);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Retention is best-effort housekeeping; never let it block the run.
+                    logger.LogWarning(ex, "Retention pass failed; continuing with the run.");
+                }
 
-            var runner = new PumpRunner(engine, discovery, config.Connections, presenter, logger);
+                var engine = new PumpEngine(options, guidProvider: new FixedGuidProvider(runId), logger: logger);
+                var discovery = new DiscoveryService(new LoaderOptions
+                {
+                    // Derive legacy flags from the already-resolved PumpOptions, not by re-reading settings.
+                    LegacyGroupBySlug = options.LegacyGroupBySlug,
+                    LegacyGlobalState = options.LegacyGlobalState,
+                });
+                var presenter = new ConsolePresenter();
 
-            // [B1] OperationCanceledException is caught BEFORE the config-error handler so a Ctrl-C or a
-            // pre-cancelled token maps to exit 2, not exit 1, and no stack trace reaches the scheduler.
-            try
-            {
+                // ExternContext is intentionally minimal in v1: no values are sourced from the CLI yet. Hosts that
+                // need batch-date/tenant inputs add them here from configuration or args.
+                var externCtx = ExternContext.FromValues(new Dictionary<string, object?>());
+
+                var runner = new PumpRunner(engine, discovery, connections, presenter, logger);
+
                 return resumeFrom is { } from
                     ? await runner.RunResumeAsync(config.ScriptFolders, externCtx, from, ct).ConfigureAwait(false)
                     : await runner.RunAsync(config.ScriptFolders, externCtx, ct).ConfigureAwait(false);
@@ -124,6 +132,10 @@ public static class HostBootstrap
             {
                 await Console.Error.WriteLineAsync("Run cancelled.").ConfigureAwait(false);
                 return 2;
+            }
+            catch (Exception ex)
+            {
+                return await HostExit.MapConfigExceptionAsync(ex, logger, Console.Error).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException oce) when (oce.CancellationToken == ct || ct.IsCancellationRequested)
@@ -134,7 +146,7 @@ public static class HostBootstrap
         }
         catch (Exception ex)
         {
-            return await HostExit.MapConfigExceptionAsync(ex, logger, Console.Error).ConfigureAwait(false);
+            return await HostExit.MapConfigExceptionAsync(ex, logger: null, Console.Error).ConfigureAwait(false);
         }
     }
 

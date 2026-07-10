@@ -1,6 +1,7 @@
 // Copyright (c) 2026 crossVault GmbH.
 
 using HydraData.Engine;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace HydraData.Host.Tests;
@@ -98,5 +99,52 @@ public class ConsolePresenterTests
         Assert.Contains("01_20_fail.cs: Error (committed=False)", text);
         // No Spectre markup leaked into the capturable output.
         Assert.DoesNotContain("[bold]", text);
+    }
+
+    [Fact]
+    public async Task Tty_summary_captures_bracket_slug_in_preflight_errors()
+    {
+        const string scriptName = "01_10_[kunden]_x.cs";
+        using var scaffold = new HostScaffold()
+            .AddStep(scriptName, "Qery(); return Ok();");
+        var report = await ExecuteWithoutPresenterAsync(scaffold);
+        var output = new StringWriter();
+        var presenter = new ConsolePresenter(output, isInteractive: true);
+
+        var exception = Record.Exception(() => presenter.RenderSummary(report));
+
+        Assert.NotEmpty(report.PreflightErrors);
+        Assert.Null(exception);
+        Assert.Contains(scriptName, output.ToString());
+    }
+
+    [Fact]
+    public async Task Tty_summary_captures_bracket_slug_in_steps()
+    {
+        const string scriptName = "01_10_[kunden]_x.cs";
+        using var scaffold = new HostScaffold()
+            .AddStep(scriptName, "return Ok();");
+        var report = await ExecuteWithoutPresenterAsync(scaffold);
+        var output = new StringWriter();
+        var presenter = new ConsolePresenter(output, isInteractive: true);
+
+        var exception = Record.Exception(() => presenter.RenderSummary(report));
+
+        Assert.Single(report.Steps);
+        Assert.Null(exception);
+        Assert.Contains(scriptName, output.ToString());
+    }
+
+    private static Task<RunReport> ExecuteWithoutPresenterAsync(HostScaffold scaffold)
+    {
+        var engine = new PumpEngine(
+            new PumpOptions(scaffold.WorkspaceBase, PumpFolderPolicy.Empty),
+            logger: NullLogger.Instance);
+        var context = new DiscoveryService().Discover([scaffold.ScriptDir]);
+        return engine.ExecuteAsync(
+            context,
+            ExternContext.FromValues(new Dictionary<string, object?>()),
+            scaffold.Connections(),
+            ct: TestContext.Current.CancellationToken);
     }
 }

@@ -64,6 +64,12 @@ public class HostBootstrapTests : IDisposable
             : [];
     }
 
+    private string GetHostLog() =>
+        File.ReadAllText(Path.Combine(Assert.Single(GetGuidRunDirs()), "host.log"));
+
+    private static int CountOccurrences(string text, string value) =>
+        text.Split(value, StringSplitOptions.None).Length - 1;
+
     [Fact]
     public async Task Retention_enabled_deletes_old_guid_run_and_creates_new_run()
     {
@@ -169,6 +175,35 @@ public class HostBootstrapTests : IDisposable
         var exit = await HostBootstrap.RunAsync(_baseDir, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exit);
+        Assert.Contains("Configuration/preflight failure", GetHostLog());
+    }
+
+    [Fact]
+    public async Task Duplicate_connection_id_warning_is_written_to_host_log_once()
+    {
+        WriteAppSettings();
+        File.WriteAllText(Path.Combine(_baseDir, "connections.xml"), """
+            <ConnectionStrings>
+              <ConnectionString targetSystem="MSSQL" name="stage">
+                <Parameters>
+                  <Parameter key="Server" value="localhost" type="String" />
+                  <Parameter key="Database" value="stage" type="String" />
+                </Parameters>
+              </ConnectionString>
+              <ConnectionString targetSystem="MSSQL" name="stage">
+                <Parameters>
+                  <Parameter key="Server" value="localhost" type="String" />
+                  <Parameter key="Database" value="stage" type="String" />
+                </Parameters>
+              </ConnectionString>
+            </ConnectionStrings>
+            """);
+        AddScript("01_10_a.cs", "return Ok();");
+
+        var exit = await HostBootstrap.RunAsync(_baseDir, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(1, CountOccurrences(GetHostLog(), "Doppelte Connection-Id"));
     }
 
     // [B1] Cancellation contract: pre-cancelled token → exit 2, not a thrown exception.
@@ -185,6 +220,19 @@ public class HostBootstrapTests : IDisposable
         var exit = await HostBootstrap.RunAsync(_baseDir, cts.Token);
 
         Assert.Equal(2, exit);
+    }
+
+    [Fact]
+    public async Task Pre_cancelled_token_wins_over_missing_config_and_preserves_old_run()
+    {
+        var oldRunDir = MakeOldRunDir();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var exit = await HostBootstrap.RunAsync(_baseDir, cts.Token);
+
+        Assert.Equal(2, exit);
+        Assert.True(Directory.Exists(oldRunDir));
     }
 
     // [B2] Total guard: missing appsettings.json (config load runs inside the try) → exit 1.

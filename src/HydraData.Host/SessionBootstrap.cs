@@ -69,6 +69,7 @@ public static class SessionBootstrap
 
             var config = HostConfigLoader.Load(baseDirectory, logger);
             var options = config.Options;
+            var connections = new ConnectionDirectory(config.Registry);
 
             var discovery = new DiscoveryService(new LoaderOptions
             {
@@ -80,7 +81,7 @@ public static class SessionBootstrap
             var externCtx = ExternContext.FromValues(new Dictionary<string, object?>());
 
             // The session is the unit of state: one long-lived PumpSession for the entire REPL lifetime.
-            using var session = new PumpSession(ctx, externCtx, config.Connections, options, logger: logger);
+            using var session = new PumpSession(ctx, externCtx, connections, options, logger: logger);
 
             // Non-TTY progress sink: plain text, no Spectre interactive elements.
             var presenter = new ConsolePresenter(actualOutput, isInteractive: false);

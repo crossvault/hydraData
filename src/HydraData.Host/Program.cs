@@ -6,10 +6,17 @@ using HydraData.Host;
 // classes; Program.cs only wires the cancellation token and returns the process exit code (0/1/2) verbatim
 // from the run report.
 using var cts = new CancellationTokenSource();
+var cancellationRequested = 0;
 Console.CancelKeyPress += (_, e) =>
 {
-    e.Cancel = true; // let the run roll back/propagate rather than hard-killing the process.
-    cts.Cancel();
+    if (Interlocked.Exchange(ref cancellationRequested, 1) == 0)
+    {
+        // First Ctrl-C: suppress termination and let the run roll back through cooperative cancellation.
+        e.Cancel = true;
+        cts.Cancel();
+    }
+
+    // Second Ctrl-C: leave e.Cancel false so the OS may terminate a non-cooperative script.
 };
 
 // Dispatch:

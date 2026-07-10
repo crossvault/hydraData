@@ -1,5 +1,6 @@
 // Copyright (c) 2026 crossVault GmbH.
 
+using System.Globalization;
 using HydraData.Engine;
 
 namespace HydraData.Host;
@@ -36,16 +37,16 @@ public static class OrderKeyParser
         if (parts.Length < 2 || parts.Length > 3)
             return false;
 
-        if (!int.TryParse(parts[0], out var group) || group < 0)
+        if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var group))
             return false;
 
-        if (!int.TryParse(parts[1], out var step) || step < 0)
+        if (!int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var step))
             return false;
 
         int? subStep = null;
         if (parts.Length == 3)
         {
-            if (!int.TryParse(parts[2], out var ss) || ss < 0)
+            if (!int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var ss))
                 return false;
             subStep = ss;
         }

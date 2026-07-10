@@ -20,6 +20,7 @@ public sealed class ConsolePresenter : IProgress<PumpProgress>
 {
     private readonly TextWriter _out;
     private readonly bool _isTty;
+    private readonly IAnsiConsole _ansiConsole;
 
     /// <summary>Creates a presenter.</summary>
     /// <param name="output">Where plain text is written.</param>
@@ -31,6 +32,10 @@ public sealed class ConsolePresenter : IProgress<PumpProgress>
     {
         _out = output ?? Console.Out;
         _isTty = isInteractive ?? !Console.IsOutputRedirected;
+        _ansiConsole = AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Out = new AnsiConsoleOutput(_out),
+        });
     }
 
     /// <summary>Whether the presenter considers itself attached to an interactive terminal.</summary>
@@ -109,18 +114,22 @@ public sealed class ConsolePresenter : IProgress<PumpProgress>
         }
     }
 
-    private static void RenderSpectreSummary(RunReport report)
+    private void RenderSpectreSummary(RunReport report)
     {
-        // Static (non-interactive) Spectre rendering only: AnsiConsole.Write(table) prints once. No Live,
+        // Static (non-interactive) Spectre rendering only: IAnsiConsole.Write(table) prints once. No Live,
         // Status, Progress or Prompt is used, consistent with "Spectre nur bei TTY" being a presentation
-        // nicety, not an interactive dependency.
+        // nicety, not an interactive dependency. The console targets the same injected writer as progress.
         if (report.PreflightErrors.Count > 0)
         {
             var errors = new Table().AddColumns("Code", "Script", "Pos", "Message");
             foreach (var d in report.PreflightErrors)
-                errors.AddRow(d.Code, d.ScriptName, $"{d.Line},{d.Column}", Markup.Escape(d.Message));
-            AnsiConsole.Write(errors);
-            AnsiConsole.MarkupLine($"Run [bold]{report.RunId}[/] -> exit code [bold]{report.ExitCode}[/]");
+                errors.AddRow(
+                    Markup.Escape(d.Code),
+                    Markup.Escape(d.ScriptName),
+                    $"{d.Line},{d.Column}",
+                    Markup.Escape(d.Message));
+            _ansiConsole.Write(errors);
+            _ansiConsole.MarkupLine($"Run [bold]{report.RunId}[/] -> exit code [bold]{report.ExitCode}[/]");
             return;
         }
 
@@ -131,8 +140,8 @@ public sealed class ConsolePresenter : IProgress<PumpProgress>
             table.AddRow(Markup.Escape(s.ScriptName), verdict, s.Committed ? "yes" : "no");
         }
 
-        AnsiConsole.Write(table);
-        AnsiConsole.MarkupLine($"Run [bold]{report.RunId}[/] -> exit code [bold]{report.ExitCode}[/]");
+        _ansiConsole.Write(table);
+        _ansiConsole.MarkupLine($"Run [bold]{report.RunId}[/] -> exit code [bold]{report.ExitCode}[/]");
     }
 
     private static string Indent(string text) =>

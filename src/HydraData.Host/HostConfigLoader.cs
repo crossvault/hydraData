@@ -21,8 +21,8 @@ internal static class HostConfigLoader
     /// </param>
     /// <returns>
     /// A <see cref="HostConfig"/> record holding the bound <see cref="PumpSettings"/>, resolved
-    /// <see cref="PumpOptions"/>, script folders, connections file path, and a ready-to-use
-    /// <see cref="IConnectionDirectory"/>.
+    /// <see cref="PumpOptions"/>, script folders, the parsed <see cref="ConnectionRegistry"/>, and its
+    /// non-fatal warnings.
     /// </returns>
     /// <remarks>
     /// Configuration loading intentionally occurs here rather than inside each bootstrap's try block
@@ -45,9 +45,8 @@ internal static class HostConfigLoader
         var connectionsFile = PumpOptionsMapper.ResolveConnectionsFile(settings, baseDirectory);
 
         var registry = ConnectionRegistry.Load(connectionsFile, logger);
-        var connections = new ConnectionDirectory(registry);
 
-        return new HostConfig(settings, options, scriptFolders, connections);
+        return new HostConfig(settings, options, scriptFolders, registry, registry.Warnings);
     }
 }
 
@@ -58,9 +57,11 @@ internal static class HostConfigLoader
 /// <param name="Settings">The raw bound <see cref="PumpSettings"/> (needed by <see cref="HostBootstrap"/> for retention days).</param>
 /// <param name="Options">The resolved engine <see cref="PumpOptions"/> (all paths absolute).</param>
 /// <param name="ScriptFolders">Resolved, absolute script folder paths.</param>
-/// <param name="Connections">A ready-to-use <see cref="IConnectionDirectory"/>.</param>
+/// <param name="Registry">The parsed connection registry; directory materialisation is deferred to the host.</param>
+/// <param name="Warnings">Non-fatal warnings produced while parsing <c>connections.xml</c>.</param>
 internal sealed record HostConfig(
     PumpSettings Settings,
     PumpOptions Options,
     IReadOnlyList<string> ScriptFolders,
-    IConnectionDirectory Connections);
+    ConnectionRegistry Registry,
+    IReadOnlyList<ConnectionRegistryWarning> Warnings);
