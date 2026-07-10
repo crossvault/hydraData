@@ -284,6 +284,7 @@ public sealed class MssqlDbSeamTests : IAsyncLifetime
 
         SqlConnection? blockerConnection = null;
         SqlTransaction? blockerTransaction = null;
+        IDbSlot? slot = null;
         try
         {
             blockerConnection = new SqlConnection(_info.ConnectionString);
@@ -297,7 +298,7 @@ public sealed class MssqlDbSeamTests : IAsyncLifetime
                 blockerCommand.ExecuteNonQuery();
             }
 
-            using var slot = new ConnectionGateway().Open(_info, commandTimeoutSeconds: 2);
+            slot = new ConnectionGateway().Open(_info, commandTimeoutSeconds: 2);
             var rows = new List<IDictionary<string, object?>>
             {
                 new Dictionary<string, object?> { ["id"] = 1 },
@@ -315,8 +316,21 @@ public sealed class MssqlDbSeamTests : IAsyncLifetime
         }
         finally
         {
-            blockerTransaction?.Dispose();
-            blockerConnection?.Dispose();
+            try
+            {
+                try
+                {
+                    blockerTransaction?.Dispose();
+                }
+                finally
+                {
+                    blockerConnection?.Dispose();
+                }
+            }
+            finally
+            {
+                slot?.Dispose();
+            }
         }
     }
 
