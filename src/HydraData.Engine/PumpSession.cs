@@ -149,21 +149,30 @@ public sealed class PumpSession : IDisposable
         // RunId once, then ONE workspace — both stable for the session lifetime so the RunDir (and any
         // expensive DuckDB extract) persists across re-runs (mirrors PumpEngine's up-front creation).
         RunId = guids.NewGuid();
-        _runScope = _logger.BeginScope(new Dictionary<string, object> { ["RunId"] = RunId });
-        Workspace = new Workspace(_options.WorkspaceBase, RunId, _options.Folders, _logger);
+        try
+        {
+            _runScope = _logger.BeginScope(new Dictionary<string, object> { ["RunId"] = RunId });
+            Workspace = new Workspace(_options.WorkspaceBase, RunId, _options.Folders, _logger);
 
-        _validator = new StepValidator(_options.AllowUnsafeDirectAccess, _compiler, _logger);
-        _executor = new StepExecutor(_options, _compiler, gw, clock, Workspace, _logger);
+            _validator = new StepValidator(_options.AllowUnsafeDirectAccess, _compiler, _logger);
+            _executor = new StepExecutor(_options, _compiler, gw, clock, Workspace, _logger);
 
-        _legacyGlobalState = _options.LegacyGlobalState ? new PumpState() : null;
+            _legacyGlobalState = _options.LegacyGlobalState ? new PumpState() : null;
 
-        // File-only sessions (zero steps) skip connection resolution entirely — no connection is needed.
-        // A directory without any configured connection AND at least one step throws eagerly here so the
-        // caller sees the misconfiguration at construction time rather than on the first step run.
-        if (_ctx.Steps.Count > 0)
-            _defaultConnection = ConnectionInfo.AsConnectionInfo(_connections.Default);
+            // File-only sessions (zero steps) skip connection resolution entirely — no connection is needed.
+            // A directory without any configured connection AND at least one step throws eagerly here so the
+            // caller sees the misconfiguration at construction time rather than on the first step run.
+            if (_ctx.Steps.Count > 0)
+                _defaultConnection = ConnectionInfo.AsConnectionInfo(_connections.Default);
 
-        _logger.LogInformation("Step session {RunId} opened over {StepCount} step(s).", RunId, _ctx.Steps.Count);
+            _logger.LogInformation("Step session {RunId} opened over {StepCount} step(s).", RunId, _ctx.Steps.Count);
+        }
+        catch
+        {
+            _runScope?.Dispose();
+            _gate.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The session run identifier, generated once at construction and stable for its lifetime.</summary>
@@ -318,7 +327,7 @@ public sealed class PumpSession : IDisposable
             scriptText = await File.ReadAllTextAsync(step.FilePath, ct).ConfigureAwait(false);
             fresh = step with { Meta = StepMeta.Parse(scriptText) };
         }
-        catch (IOException ioEx)
+        catch (Exception ioEx) when (ioEx is IOException or UnauthorizedAccessException)
         {
             // File deleted/locked between calls: surface as a clear result rather than crashing.
             _logger.LogError("Step session {RunId}: could not read {ScriptName}: {Message}.",

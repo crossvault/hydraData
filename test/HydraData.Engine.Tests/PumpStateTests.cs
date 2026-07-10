@@ -103,13 +103,45 @@ public class PumpStateTests
     }
 
     [Fact]
-    public void Require_throws_InvalidCastException_for_null_valued_key()
+    public void Get_value_type_returns_default_for_null_valued_key()
+    {
+        var state = new PumpState();
+        state.Set("nullable", null);
+
+        Assert.Equal(0, state.Get<int>("nullable"));
+    }
+
+    [Fact]
+    public void Get_throws_InvalidCastException_for_wrong_type()
+    {
+        var state = new PumpState();
+        state.Set("number", "not-an-int");
+
+        Assert.Throws<InvalidCastException>(() => state.Get<int>("number"));
+    }
+
+    [Fact]
+    public void Require_throws_clear_InvalidOperationException_for_null_valued_key()
     {
         var state = new PumpState();
         state.Set("nv", null);
-        var ex = Assert.Throws<InvalidCastException>(() => state.Require<int>("nv"));
+        var ex = Assert.Throws<InvalidOperationException>(() => state.Require<int>("nv"));
         Assert.Contains("nv", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("null", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Int32", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Require_throws_clear_InvalidOperationException_for_wrong_type()
+    {
+        var state = new PumpState();
+        state.Set("number", "not-an-int");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => state.Require<int>("number"));
+
+        Assert.Contains("number", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("System.String", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Int32", ex.Message, StringComparison.Ordinal);
     }
 
     // ── Snapshot independence ────────────────────────────────────────────────
@@ -138,9 +170,9 @@ public class PumpStateTests
 
         var snap = state.Snapshot();
 
-        // The returned type is IReadOnlyDictionary — casting to the mutable
-        // underlying type should not be possible through the public contract.
-        Assert.IsAssignableFrom<IReadOnlyDictionary<string, object?>>(snap);
+        var mutableView = Assert.IsAssignableFrom<IDictionary<string, object?>>(snap);
+        Assert.Throws<NotSupportedException>(() => mutableView["k"] = "changed");
+        Assert.Equal("v", snap["k"]);
     }
 
     [Fact]

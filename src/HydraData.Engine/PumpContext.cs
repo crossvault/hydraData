@@ -150,7 +150,13 @@ public sealed class PumpContext
     /// </summary>
     /// <param name="message">The note message.</param>
     /// <param name="severity">The note severity.</param>
-    public void Note(string message, Severity severity) => _notes.Add(new Note(message, severity));
+    public void Note(string message, Severity severity)
+    {
+        if (!Enum.IsDefined(severity))
+            throw new ArgumentOutOfRangeException(nameof(severity), severity, "Unknown severity.");
+
+        _notes.Add(new Note(message, severity));
+    }
 
     /// <summary>The notes recorded during this step, in order.</summary>
     public IReadOnlyList<Note> Notes => _notes;

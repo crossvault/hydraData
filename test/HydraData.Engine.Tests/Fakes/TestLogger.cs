@@ -21,6 +21,18 @@ internal sealed class TestLogger : ILogger
     public IEnumerable<object> AllScopeStates =>
         Entries.SelectMany(e => e.Scopes);
 
+    /// <summary>The number of scopes currently active on this asynchronous flow.</summary>
+    public int ActiveScopeCount
+    {
+        get
+        {
+            var count = 0;
+            for (var node = _currentScope.Value; node is not null; node = node.Parent)
+                count++;
+            return count;
+        }
+    }
+
     public IDisposable BeginScope<TState>(TState state) where TState : notnull
     {
         var node = new ScopeNode(state, _currentScope.Value, this);

@@ -179,13 +179,16 @@ public sealed class PumpEngine : IPumpEngine
         // (mirrors PumpSession). A per-file read failure is captured here and surfaced at the step's execution
         // slot below as a Ran/Error step — never an uncaught throw. The read is not tied to the cancellation
         // token (it mirrors the old, non-cancellable preflight read); cancellation is observed during execution.
+        var steps = ctx.Steps.ToArray();
         var scriptTexts = new string?[ctx.Steps.Count];
         var readErrors = new string?[ctx.Steps.Count];
         for (int i = 0; i < ctx.Steps.Count; i++)
         {
             try
             {
-                scriptTexts[i] = await File.ReadAllTextAsync(ctx.Steps[i].FilePath).ConfigureAwait(false);
+                var scriptText = await File.ReadAllTextAsync(ctx.Steps[i].FilePath).ConfigureAwait(false);
+                scriptTexts[i] = scriptText;
+                steps[i] = ctx.Steps[i] with { Meta = StepMeta.Parse(scriptText) };
             }
             catch (Exception ioEx) when (ioEx is IOException or UnauthorizedAccessException)
             {
@@ -205,7 +208,7 @@ public sealed class PumpEngine : IPumpEngine
         for (int i = 0; i < ctx.Steps.Count; i++)
         {
             if (readErrors[i] is not null) continue;
-            diagnostics.AddRange(validator.ValidateStep(ctx.Steps[i], scriptTexts[i]!).Diagnostics);
+            diagnostics.AddRange(validator.ValidateStep(steps[i], scriptTexts[i]!).Diagnostics);
         }
         var report = new ValidationReport(diagnostics.AsReadOnly());
         progress?.Report(new PumpProgress(PumpPhase.Validated));
@@ -255,7 +258,7 @@ public sealed class PumpEngine : IPumpEngine
         PumpState? groupState = null;
         int? currentGroup = null;
 
-        var results = new List<StepRunResult>(ctx.Steps.Count);
+        var results = new List<StepRunResult>(steps.Length);
         bool halted = false;
 
         // Single source of truth for the per-step tx/capture/state wiring (S1.0), shared with the
@@ -263,9 +266,9 @@ public sealed class PumpEngine : IPumpEngine
         // exit code, and the Discovered/Validated/RunFinished progress phases.
         var executor = new StepExecutor(_options, _compiler, _gateway, _timeProvider, workspace, _logger);
 
-        for (int i = 0; i < ctx.Steps.Count; i++)
+        for (int i = 0; i < steps.Length; i++)
         {
-            var step = ctx.Steps[i];
+            var step = steps[i];
 
             // Resume gate: a step before the resume point is recorded Skipped and never runs.
             // EffectiveSeverity is Success because the step has no severity of its own; ComputeExitCode
@@ -382,7 +385,7 @@ public sealed class PumpEngine : IPumpEngine
     {
         foreach (var r in results)
         {
-            if (r.Status == StepRunStatus.Ran && r.EffectiveSeverity == Severity.Error)
+            if (r.Status == StepRunStatus.Ran && r.EffectiveSeverity >= Severity.Error)
                 return 2;
         }
 

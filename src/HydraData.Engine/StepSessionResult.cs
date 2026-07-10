@@ -119,30 +119,49 @@ public sealed record StepSessionResult
 
     /// <summary>Builds a <see cref="StepSessionStatus.NotFound"/> result for an unknown step order.</summary>
     /// <param name="message">A human-readable description of the miss.</param>
-    public static StepSessionResult NotFound(string message) =>
-        new(StepSessionStatus.NotFound, new ValidationReport([]), result: null, message: message);
+    public static StepSessionResult NotFound(string message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return new(StepSessionStatus.NotFound, new ValidationReport([]), result: null, message: message);
+    }
 
     /// <summary>
     /// Builds a <see cref="StepSessionStatus.NotValidated"/> result: the step was found but not executed
     /// because validation failed (the report carries the diagnostics).
     /// </summary>
     /// <param name="validation">The failing single-step validation report.</param>
-    public static StepSessionResult Invalid(ValidationReport validation) =>
-        new(StepSessionStatus.NotValidated, validation, result: null);
+    public static StepSessionResult Invalid(ValidationReport validation)
+    {
+        ArgumentNullException.ThrowIfNull(validation);
+        if (validation.IsValid)
+            throw new ArgumentException("Invalid requires a failing report.", nameof(validation));
+
+        return new(StepSessionStatus.NotValidated, validation, result: null);
+    }
 
     /// <summary>
     /// Builds a <see cref="StepSessionStatus.NotValidated"/> result for a step whose file could not be read
     /// between calls (no script diagnostics; the reason is in <paramref name="message"/>).
     /// </summary>
     /// <param name="message">A human-readable description of the read failure.</param>
-    public static StepSessionResult Unreadable(string message) =>
-        new(StepSessionStatus.NotValidated, new ValidationReport([]), result: null, message: message);
+    public static StepSessionResult Unreadable(string message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        return new(StepSessionStatus.NotValidated, new ValidationReport([]), result: null, message: message);
+    }
 
     /// <summary>
     /// Builds a <see cref="StepSessionStatus.Ran"/> result for a step that validated and executed.
     /// </summary>
     /// <param name="validation">The (passing) single-step validation report; may carry warnings.</param>
     /// <param name="result">The step's execution outcome.</param>
-    public static StepSessionResult Ran(ValidationReport validation, StepRunResult result) =>
-        new(StepSessionStatus.Ran, validation, result);
+    public static StepSessionResult Ran(ValidationReport validation, StepRunResult result)
+    {
+        ArgumentNullException.ThrowIfNull(validation);
+        ArgumentNullException.ThrowIfNull(result);
+        if (!validation.IsValid)
+            throw new ArgumentException("Ran requires a passing report.", nameof(validation));
+
+        return new(StepSessionStatus.Ran, validation, result);
+    }
 }

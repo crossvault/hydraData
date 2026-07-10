@@ -25,7 +25,8 @@ public class ConnectionsLoadingTests
         // 'Initial Catalog' keyword (SqlConnectionStringBuilder canonicalises Database → Initial Catalog),
         // rather than just checking that the literal "stage" appears anywhere (which the connection NAME
         // also satisfies). This pins that the Database=stage parameter was actually applied.
-        Assert.Contains("Initial Catalog=stage", directory.Default.ConnectionString, StringComparison.OrdinalIgnoreCase);
+        var concrete = Assert.IsType<ConnectionInfo>(directory.Default);
+        Assert.Contains("Initial Catalog=stage", concrete.ConnectionString, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

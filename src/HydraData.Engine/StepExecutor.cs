@@ -140,7 +140,7 @@ internal sealed class StepExecutor
         progress?.Report(new PumpProgress(PumpPhase.StepFinished, ScriptName: step.FileName, Result: outcome.Result));
 
         bool halt = false;
-        if (outcome.EffectiveSeverity == Severity.Error && step.Meta.HaltOnError)
+        if (outcome.EffectiveSeverity >= Severity.Error && step.Meta.HaltOnError)
         {
             _logger.LogError("Step {ScriptName} (run {RunId}) errored and declares haltOnError; halting the run.", step.FileName, _workspace.RunId);
             halt = true;

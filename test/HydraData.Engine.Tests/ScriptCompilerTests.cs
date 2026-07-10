@@ -57,6 +57,19 @@ public class ScriptCompilerTests
     }
 
     [Fact]
+    public void Safe_script_cannot_compile_connection_string_access()
+    {
+        var compiler = new ScriptCompiler();
+
+        var ex = Assert.Throws<ScriptCompileException>(() =>
+            compiler.GetRunner("return Ok(CurrentConnection.ConnectionString);"));
+
+        Assert.Contains(ex.Diagnostics, diagnostic =>
+            diagnostic.Code == "CS1061" &&
+            diagnostic.Message.Contains("ConnectionString", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Warning_producing_script_compiles_and_runs_without_poisoning_cache()
     {
         // A script that produces a Roslyn WARNING but no error must compile successfully: errors==0, so

@@ -222,6 +222,51 @@ public class PumpContextTests
     }
 
     [Fact]
+    public void CommitAll_continues_across_slots_when_first_commit_throws()
+    {
+        var gateway = new FakeConnectionGateway { NextSlotThrowsOnCommit = true };
+        var ctx = PumpContextFactory.Create(gateway);
+        ctx.Execute(PumpContextFactory.DefaultConnection, "insert into a values (1)");
+        ctx.Execute(PumpContextFactory.SecondConnection, "insert into b values (1)");
+
+        var error = Assert.Throws<AggregateException>(ctx.CommitAll);
+
+        Assert.Single(error.InnerExceptions);
+        Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Commits));
+        Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
+    }
+
+    [Fact]
+    public void RollbackAll_continues_across_slots_when_first_rollback_throws()
+    {
+        var gateway = new FakeConnectionGateway { NextSlotThrowsOnRollback = true };
+        var ctx = PumpContextFactory.Create(gateway);
+        ctx.Execute(PumpContextFactory.DefaultConnection, "insert into a values (1)");
+        ctx.Execute(PumpContextFactory.SecondConnection, "insert into b values (1)");
+
+        var error = Assert.Throws<AggregateException>(ctx.RollbackAll);
+
+        Assert.Single(error.InnerExceptions);
+        Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Rollbacks));
+        Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
+    }
+
+    [Fact]
+    public void CommitAll_continues_across_slots_when_first_dispose_throws()
+    {
+        var gateway = new FakeConnectionGateway { NextSlotThrowsOnDispose = true };
+        var ctx = PumpContextFactory.Create(gateway);
+        ctx.Execute(PumpContextFactory.DefaultConnection, "insert into a values (1)");
+        ctx.Execute(PumpContextFactory.SecondConnection, "insert into b values (1)");
+
+        var error = Assert.Throws<AggregateException>(ctx.CommitAll);
+
+        Assert.Single(error.InnerExceptions);
+        Assert.All(gateway.Slots, slot => Assert.Equal(1, slot.Commits));
+        Assert.All(gateway.Slots, slot => Assert.True(slot.Disposed));
+    }
+
+    [Fact]
     public void Connection_targeted_DB_call_with_null_connection_throws()
     {
         var ctx = PumpContextFactory.Create(new FakeConnectionGateway());
@@ -271,7 +316,6 @@ public class PumpContextTests
         public string Id => ConnectionInfo.MakeId(ConnectionInfo.TargetSystem(DbType), Name);
         public string Name { get; } = name;
         public DbType DbType { get; } = dbType;
-        public string ConnectionString => "Server=nowhere;";
     }
 
 

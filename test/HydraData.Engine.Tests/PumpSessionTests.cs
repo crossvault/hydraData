@@ -22,17 +22,22 @@ public sealed class PumpSessionTests
     private static PumpSession NewSession(
         EngineScaffold scaffold,
         FakeConnectionGateway gateway,
-        bool legacyGlobalState = false)
+        bool legacyGlobalState = false,
+        TimeSpan? timeout = null,
+        TimeProvider? timeProvider = null)
     {
         var options = new PumpOptions(
-            scaffold.WorkspaceBase, PumpFolderPolicy.Empty, LegacyGlobalState: legacyGlobalState);
+            scaffold.WorkspaceBase,
+            PumpFolderPolicy.Empty,
+            StepTimeout: timeout,
+            LegacyGlobalState: legacyGlobalState);
         return new PumpSession(
             scaffold.Discover(),
             EngineScaffold.Extern(),
             EngineScaffold.Connections(),
             options,
             new FakeGuidProvider(FixedRunId),
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             gateway,
             logger: null);
     }
@@ -236,6 +241,51 @@ public sealed class PumpSessionTests
     // ── Unknown order → clear result/error ────────────────────────────────────
 
     [Fact]
+    public async Task Empty_context_with_empty_connection_directory_constructs_and_returns_empty_results()
+    {
+        using var scaffold = new EngineScaffold();
+        var gateway = new FakeConnectionGateway();
+        var options = new PumpOptions(scaffold.WorkspaceBase, PumpFolderPolicy.Empty);
+        using var session = new PumpSession(
+            scaffold.Discover(),
+            EngineScaffold.Extern(),
+            new EmptyConnectionDirectory(),
+            options,
+            new FakeGuidProvider(FixedRunId),
+            TimeProvider.System,
+            gateway,
+            logger: null);
+
+        var group = await session.RunGroupAsync(1, ct: Ct);
+        var step = await session.RunStepAsync(Order(1, 10), ct: Ct);
+
+        Assert.Empty(group);
+        Assert.Equal(StepSessionStatus.NotFound, step.Status);
+        Assert.Empty(gateway.Slots);
+    }
+
+    [Fact]
+    public void Nonempty_context_with_empty_connection_directory_fails_eagerly_and_disposes_scope()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_a.cs", "return Ok();");
+        var logger = new TestLogger();
+        var options = new PumpOptions(scaffold.WorkspaceBase, PumpFolderPolicy.Empty);
+
+        Assert.Throws<InvalidOperationException>(() => new PumpSession(
+            scaffold.Discover(),
+            EngineScaffold.Extern(),
+            new EmptyConnectionDirectory(),
+            options,
+            new FakeGuidProvider(FixedRunId),
+            TimeProvider.System,
+            new FakeConnectionGateway(),
+            logger));
+
+        Assert.Equal(0, logger.ActiveScopeCount);
+    }
+
+    [Fact]
     public async Task Unknown_order_returns_clear_not_found_result()
     {
         var gateway = new FakeConnectionGateway();
@@ -332,6 +382,29 @@ public sealed class PumpSessionTests
         Assert.Contains("could not be read", r2.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task File_replaced_by_directory_between_calls_returns_not_validated_with_message()
+    {
+        var gateway = new FakeConnectionGateway();
+        using var scaffold = new EngineScaffold();
+        scaffold.AddStep("01_10_directory.cs", "return Ok();");
+        using var session = NewSession(scaffold, gateway);
+
+        var first = await session.RunStepAsync(Order(1, 10), ct: Ct);
+        Assert.True(first.Validated);
+
+        var filePath = Assert.Single(session.KnownSteps).FilePath;
+        File.Delete(filePath);
+        Directory.CreateDirectory(filePath);
+
+        var second = await session.RunStepAsync(Order(1, 10), ct: Ct);
+
+        Assert.Equal(StepSessionStatus.NotValidated, second.Status);
+        Assert.True(second.Found);
+        Assert.False(second.Validated);
+        Assert.Contains("could not be read", second.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Edit that flips @unsafe false→true between calls (engine grant off) → second call returns PUMP010,
     /// proving meta is RE-PARSED from the newly read text, not reused from the first call.
@@ -406,6 +479,100 @@ public sealed class PumpSessionTests
         // Gate must have been released: a subsequent call with a live token must succeed.
         var r = await session.RunStepAsync(Order(1, 10), ct: Ct);
         Assert.True(r.Validated);
+    }
+
+    [Fact]
+    public async Task Mid_step_cancellation_rolls_back_rethrows_and_releases_gate()
+    {
+        var gateway = new FakeConnectionGateway();
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_loop.cs",
+                "Execute(\"x\"); while (true) { Cancellation.ThrowIfCancellationRequested(); } return Ok();")
+            .AddStep("01_20_after.cs", "return Ok(\"after cancellation\");");
+        using var session = NewSession(scaffold, gateway);
+        using var cts = new CancellationTokenSource();
+
+        var runTask = session.RunStepAsync(Order(1, 10), ct: cts.Token);
+        await gateway.WaitForSlotCountAsync(1, Ct);
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+        Assert.Equal(1, gateway.Slots[0].Rollbacks);
+
+        var after = await session.RunStepAsync(Order(1, 20), ct: Ct);
+        Assert.Equal("after cancellation", after.Result!.Result!.Message);
+    }
+
+    [Fact]
+    public async Task Step_timeout_uses_injected_time_and_returns_error_result()
+    {
+        var gateway = new FakeConnectionGateway();
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_timeout.cs",
+                "Execute(\"x\"); await Task.Delay(Timeout.InfiniteTimeSpan, Cancellation); return Ok();");
+        using var session = NewSession(
+            scaffold,
+            gateway,
+            timeout: TimeSpan.FromSeconds(5),
+            timeProvider: time);
+
+        var runTask = session.RunStepAsync(Order(1, 10), ct: Ct);
+        await gateway.WaitForSlotCountAsync(1, Ct);
+        time.Advance(TimeSpan.FromSeconds(6));
+
+        var result = await runTask;
+
+        Assert.Equal(StepSessionStatus.Ran, result.Status);
+        Assert.Equal(Severity.Error, result.Result!.EffectiveSeverity);
+        Assert.Equal("Step timed out.", result.Result.Result!.Message);
+        Assert.Equal(1, gateway.Slots[0].Rollbacks);
+    }
+
+    [Fact]
+    public async Task Concurrent_step_calls_are_serialized_by_session_gate()
+    {
+        var gateway = new FakeConnectionGateway();
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_block.cs",
+                "Execute(\"x\"); " +
+                "var entered = Shared.Get<int>(\"entered\"); " +
+                "Shared.Set(\"entered\", entered + 1); " +
+                "Shared.Require<TaskCompletionSource<bool>>(\"started\").TrySetResult(true); " +
+                "await Shared.Require<TaskCompletionSource<bool>>(\"release\").Task; return Ok();");
+        using var session = NewSession(scaffold, gateway);
+        var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Shared.Set("started", started);
+        session.Shared.Set("release", release);
+
+        var first = session.RunStepAsync(Order(1, 10), ct: Ct);
+        await started.Task.WaitAsync(Ct);
+        var second = session.RunStepAsync(Order(1, 10), ct: Ct);
+
+        Assert.False(second.IsCompleted);
+        Assert.Equal(1, session.Shared.Get<int>("entered"));
+        Assert.Single(gateway.Slots);
+
+        release.SetResult(true);
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(2, session.Shared.Get<int>("entered"));
+        Assert.Equal(2, gateway.Slots.Count);
+    }
+
+    [Fact]
+    public async Task Unknown_group_returns_empty_without_opening_slots()
+    {
+        var gateway = new FakeConnectionGateway();
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_a.cs", "return Ok();");
+        using var session = NewSession(scaffold, gateway);
+
+        var results = await session.RunGroupAsync(99, ct: Ct);
+
+        Assert.Empty(results);
+        Assert.Empty(gateway.Slots);
     }
 
     /// <summary>

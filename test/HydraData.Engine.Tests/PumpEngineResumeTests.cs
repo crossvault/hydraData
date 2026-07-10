@@ -194,6 +194,33 @@ public sealed class PumpEngineResumeTests
     }
 
     [Fact]
+    public async Task Resume_skips_unreadable_step_before_resume_point()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_unreadable.cs", "return Ok();")
+            .AddStep("01_20_run.cs", "return Ok();");
+        var context = scaffold.Discover();
+        var phases = new List<PumpPhase>();
+        var progress = new DeleteFileOnDiscoveredProgress(
+            context.Steps[0].FilePath,
+            phases);
+        var engine = NewEngine(scaffold, new FakeConnectionGateway());
+
+        var report = await engine.ExecuteFromAsync(
+            context,
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            Order(1, 20),
+            progress,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, report.ExitCode);
+        Assert.Equal(StepRunStatus.Skipped, report.Steps[0].Status);
+        Assert.True(report.Steps[1].Ran);
+        Assert.Contains(PumpPhase.RunFinished, phases);
+    }
+
+    [Fact]
     public async Task Resume_past_all_steps_yields_empty_run_exit_code_0_all_skipped()
     {
         using var scaffold = new EngineScaffold()
@@ -378,9 +405,7 @@ public sealed class PumpEngineResumeTests
             scaffold.Discover(), EngineScaffold.Extern(), EngineScaffold.Connections(), Order(1, 20),
             progress, ct: cts.Token);
 
-        // Poll until the slot is open (the Execute inside 01_20 records it).
-        while (gateway.Slots.Count == 0 && !runTask.IsCompleted)
-            await Task.Yield();
+        await gateway.WaitForSlotCountAsync(1, TestContext.Current.CancellationToken);
 
         cts.Cancel();
 
@@ -590,6 +615,23 @@ public sealed class PumpEngineResumeTests
         // Skipped step must not have touched the gateway.
         var sql = gateway.Slots.SelectMany(s => s.FakeExecutor.Statements).ToList();
         Assert.DoesNotContain("ShouldNotRun", sql);
+    }
+
+    private sealed class DeleteFileOnDiscoveredProgress(
+        string filePath,
+        List<PumpPhase> phases) : IProgress<PumpProgress>
+    {
+        private bool _deleted;
+
+        public void Report(PumpProgress value)
+        {
+            phases.Add(value.Phase);
+            if (_deleted || value.Phase != PumpPhase.Discovered)
+                return;
+
+            File.Delete(filePath);
+            _deleted = true;
+        }
     }
 
     /// <summary>Synchronous <see cref="IProgress{T}"/> that records each phase into a list.</summary>

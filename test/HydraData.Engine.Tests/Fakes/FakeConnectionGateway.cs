@@ -36,6 +36,12 @@ internal sealed class FakeConnectionGateway : IConnectionGateway
     /// </summary>
     public bool NextSlotThrowsOnRollback { get; set; }
 
+    /// <summary>
+    /// When set, the next slot opened by this gateway will throw from <see cref="FakeDbSlot.Dispose"/>.
+    /// Cleared after the slot is opened so subsequent slots behave normally.
+    /// </summary>
+    public bool NextSlotThrowsOnDispose { get; set; }
+
     /// <summary>Returns the slot opened for the given connection id, or fails the lookup if none was opened.</summary>
     /// <param name="id">The canonical connection id (<c>targetSystem|name</c>, case-insensitive).</param>
     /// <returns>The recorded slot for that id.</returns>
@@ -82,9 +88,11 @@ internal sealed class FakeConnectionGateway : IConnectionGateway
         {
             ThrowOnCommit = NextSlotThrowsOnCommit,
             ThrowOnRollback = NextSlotThrowsOnRollback,
+            ThrowOnDispose = NextSlotThrowsOnDispose,
         };
         NextSlotThrowsOnCommit = false;
         NextSlotThrowsOnRollback = false;
+        NextSlotThrowsOnDispose = false;
 
         List<TaskCompletionSource>? toSignal = null;
         lock (_lock)
@@ -116,6 +124,9 @@ internal sealed class FakeDbSlot : IDbSlot
 
     /// <summary>When <see langword="true"/>, <see cref="Rollback"/> throws an <see cref="InvalidOperationException"/>.</summary>
     public bool ThrowOnRollback { get; init; }
+
+    /// <summary>When <see langword="true"/>, <see cref="Dispose"/> throws an <see cref="InvalidOperationException"/>.</summary>
+    public bool ThrowOnDispose { get; init; }
 
     /// <summary>Number of times <see cref="Commit"/> was called.</summary>
     public int Commits { get; private set; }
@@ -155,7 +166,12 @@ internal sealed class FakeDbSlot : IDbSlot
             throw new InvalidOperationException("Simulated rollback failure.");
     }
 
-    public void Dispose() => Disposed = true;
+    public void Dispose()
+    {
+        Disposed = true;
+        if (ThrowOnDispose)
+            throw new InvalidOperationException("Simulated dispose failure.");
+    }
 }
 
 /// <summary>Minimal executor returning empty results; records the SQL it received.</summary>

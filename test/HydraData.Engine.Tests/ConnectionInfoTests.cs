@@ -73,4 +73,11 @@ public class ConnectionInfoTests
         IConnection conn = new ConnectionInfo("stage", DbType.Mssql, "x");
         Assert.Equal("mssql|stage", conn.Id);
     }
+
+    [Fact]
+    public void Script_facing_connection_interface_does_not_expose_connection_string()
+    {
+        Assert.Null(typeof(IConnection).GetProperty(nameof(ConnectionInfo.ConnectionString)));
+        Assert.NotNull(typeof(ConnectionInfo).GetProperty(nameof(ConnectionInfo.ConnectionString)));
+    }
 }

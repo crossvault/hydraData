@@ -35,6 +35,30 @@ public sealed class PumpEngineTests
     // ── Exit code 0: all Ok/Warn ────────────────────────────────────────────────
 
     [Fact]
+    public async Task Empty_context_needs_no_connection_and_emits_full_run_lifecycle()
+    {
+        using var scaffold = new EngineScaffold();
+        var gateway = new FakeConnectionGateway();
+        var engine = NewEngine(scaffold, gateway);
+        var phases = new List<PumpPhase>();
+
+        var report = await engine.ExecuteAsync(
+            scaffold.Discover(),
+            EngineScaffold.Extern(),
+            new EmptyConnectionDirectory(),
+            new PhaseSink(phases),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, report.ExitCode);
+        Assert.Empty(report.PreflightErrors);
+        Assert.Empty(report.Steps);
+        Assert.Empty(gateway.Slots);
+        Assert.Equal(
+            [PumpPhase.Discovered, PumpPhase.Validated, PumpPhase.RunFinished],
+            phases);
+    }
+
+    [Fact]
     public async Task All_ok_steps_yield_exit_code_0()
     {
         using var scaffold = new EngineScaffold()
@@ -196,9 +220,7 @@ public sealed class PumpEngineTests
         var runTask = engine.ExecuteAsync(
             scaffold.Discover(), EngineScaffold.Extern(), EngineScaffold.Connections(), ct: cts.Token);
 
-        // Poll until the gateway has at least one slot (the Execute inside the script opened it).
-        while (gateway.Slots.Count == 0 && !runTask.IsCompleted)
-            await Task.Yield();
+        await gateway.WaitForSlotCountAsync(1, TestContext.Current.CancellationToken);
 
         cts.Cancel();
 
@@ -246,6 +268,79 @@ public sealed class PumpEngineTests
         Assert.Equal(Severity.Error, report.Steps[1].EffectiveSeverity);
     }
 
+    [Fact]
+    public async Task Missing_middle_script_with_default_halt_marks_following_step_not_run()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_before.cs", "return Ok();")
+            .AddStep("01_20_gone.cs", "return Ok();")
+            .AddStep("01_30_after.cs", "return Ok();");
+        var context = scaffold.Discover();
+        var progress = new DeleteOnDiscoveredProgress([], context.Steps[1].FilePath, () => { });
+        var engine = NewEngine(scaffold, new FakeConnectionGateway());
+
+        var report = await engine.ExecuteAsync(
+            context,
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            progress,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.ExitCode);
+        Assert.True(report.Steps[0].Ran);
+        Assert.Equal(Severity.Error, report.Steps[1].EffectiveSeverity);
+        Assert.Equal(StepRunStatus.NotRunAfterHalt, report.Steps[2].Status);
+    }
+
+    [Fact]
+    public async Task Missing_middle_script_with_halt_false_allows_following_step_to_run()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_before.cs", "return Ok();")
+            .AddStep("01_20_gone.cs", "// @haltOnError: false\nreturn Ok();")
+            .AddStep("01_30_after.cs", "return Ok();");
+        var context = scaffold.Discover();
+        var progress = new DeleteOnDiscoveredProgress([], context.Steps[1].FilePath, () => { });
+        var engine = NewEngine(scaffold, new FakeConnectionGateway());
+
+        var report = await engine.ExecuteAsync(
+            context,
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            progress,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.ExitCode);
+        Assert.Equal(Severity.Error, report.Steps[1].EffectiveSeverity);
+        Assert.True(report.Steps[2].Ran);
+    }
+
+    [Fact]
+    public async Task Script_replaced_by_directory_is_recorded_as_error_and_run_finishes()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_directory.cs", "return Ok();");
+        var context = scaffold.Discover();
+        var phases = new List<PumpPhase>();
+        var progress = new ReplaceWithDirectoryOnDiscoveredProgress(
+            phases,
+            context.Steps[0].FilePath);
+        var engine = NewEngine(scaffold, new FakeConnectionGateway());
+
+        var report = await engine.ExecuteAsync(
+            context,
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            progress,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.ExitCode);
+        var result = Assert.Single(report.Steps);
+        Assert.True(result.Ran);
+        Assert.Equal(Severity.Error, result.EffectiveSeverity);
+        Assert.Contains(PumpPhase.RunFinished, phases);
+    }
+
     /// <summary>
     /// Progress sink that deletes a file the first time it sees <see cref="PumpPhase.Discovered"/>,
     /// simulating a script being removed just before the engine's single up-front read (B1).
@@ -270,6 +365,24 @@ public sealed class PumpEngineTests
     }
 
     // ── Group-local State vs run-global Shared (closes T04.6) ────────────────────
+
+    private sealed class ReplaceWithDirectoryOnDiscoveredProgress(
+        List<PumpPhase> phases,
+        string filePath) : IProgress<PumpProgress>
+    {
+        private bool _replaced;
+
+        public void Report(PumpProgress value)
+        {
+            phases.Add(value.Phase);
+            if (_replaced || value.Phase != PumpPhase.Discovered)
+                return;
+
+            File.Delete(filePath);
+            Directory.CreateDirectory(filePath);
+            _replaced = true;
+        }
+    }
 
     [Fact]
     public async Task State_is_group_local_and_shared_is_run_global()
@@ -360,6 +473,73 @@ public sealed class PumpEngineTests
     }
 
     // ── Per-step timeout (deterministic via ManualTimeProvider) ──────────────────
+
+    [Fact]
+    public async Task Metadata_changed_after_discovery_is_refreshed_from_the_single_execution_read()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_changed.cs", "return Ok();")
+            .AddStep("01_20_after.cs", "return Ok();");
+        var context = scaffold.Discover();
+        File.WriteAllText(
+            context.Steps[0].FilePath,
+            "// @haltOnError: false\nreturn Fail(\"changed after discovery\");");
+        var engine = NewEngine(scaffold, new FakeConnectionGateway());
+
+        var report = await engine.ExecuteAsync(
+            context,
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.ExitCode);
+        Assert.Equal(Severity.Error, report.Steps[0].EffectiveSeverity);
+        Assert.True(report.Steps[1].Ran);
+    }
+
+    [Fact]
+    public async Task Undefined_note_severity_becomes_error_rolls_back_halts_and_sets_exit_2()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_invalid_severity.cs",
+                "Execute(\"x\"); Note(\"bad\", (Severity)3); return Ok();")
+            .AddStep("01_20_after.cs", "return Ok();");
+        var gateway = new FakeConnectionGateway();
+        var engine = NewEngine(scaffold, gateway);
+
+        var report = await engine.ExecuteAsync(
+            scaffold.Discover(),
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.ExitCode);
+        Assert.Equal(Severity.Error, report.Steps[0].EffectiveSeverity);
+        Assert.Contains("severity", report.Steps[0].Result!.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(report.Steps[0].Committed);
+        Assert.Equal(1, gateway.Slots[0].Rollbacks);
+        Assert.Equal(StepRunStatus.NotRunAfterHalt, report.Steps[1].Status);
+    }
+
+    [Fact]
+    public async Task Severity_above_error_still_halts_and_sets_exit_2()
+    {
+        using var scaffold = new EngineScaffold()
+            .AddStep("01_10_invalid_result.cs",
+                "return new StepResult((Severity)3, \"invalid result severity\");")
+            .AddStep("01_20_after.cs", "return Ok();");
+        var engine = NewEngine(scaffold, new FakeConnectionGateway());
+
+        var report = await engine.ExecuteAsync(
+            scaffold.Discover(),
+            EngineScaffold.Extern(),
+            EngineScaffold.Connections(),
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, report.ExitCode);
+        Assert.Equal((Severity)3, report.Steps[0].EffectiveSeverity);
+        Assert.Equal(StepRunStatus.NotRunAfterHalt, report.Steps[1].Status);
+    }
 
     [Fact]
     public async Task Step_timeout_is_enforced_and_yields_exit_code_2()

@@ -1,6 +1,6 @@
 // Copyright (c) 2026 crossVault GmbH.
 
-using System.Diagnostics.CodeAnalysis;
+using System.Collections.ObjectModel;
 
 namespace HydraData.Engine;
 
@@ -22,28 +22,34 @@ public sealed class PumpState
 
     /// <summary>
     /// Returns the value for <paramref name="key"/> cast to <typeparamref name="T"/>,
-    /// or <see langword="default"/> if the key does not exist.
+    /// or <see langword="default"/> if the key does not exist or its value is <see langword="null"/>.
     /// </summary>
+    /// <exception cref="InvalidCastException">A non-null value has an incompatible type.</exception>
     public T? Get<T>(string key) =>
-        _data.TryGetValue(key, out var value) ? (T?)value : default;
+        _data.TryGetValue(key, out var value) && value is not null ? (T?)value : default;
 
     /// <summary>
     /// Returns the value for <paramref name="key"/> cast to <typeparamref name="T"/>.
     /// Throws <see cref="KeyNotFoundException"/> with a clear message when the key does not exist.
-    /// Throws <see cref="InvalidCastException"/> with a clear message when the key exists but holds <see langword="null"/>.
+    /// Throws <see cref="InvalidOperationException"/> with a clear message when the key exists but its
+    /// value is <see langword="null"/> or cannot satisfy <typeparamref name="T"/>.
     /// </summary>
     /// <exception cref="KeyNotFoundException">The key was not found in this state scope.</exception>
-    /// <exception cref="InvalidCastException">The key exists but its value is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// The key exists but its value is <see langword="null"/> or has an incompatible type.
+    /// </exception>
     public T Require<T>(string key)
     {
         if (!_data.TryGetValue(key, out var value))
             throw new KeyNotFoundException(
                 $"PumpState: required key '{key}' not found. " +
                 $"Available keys: [{string.Join(", ", _data.Keys)}]");
-        if (value is null)
-            throw new InvalidCastException(
-                $"PumpState: key '{key}' exists but holds null; cannot satisfy Require<{typeof(T).Name}>.");
-        return (T)value;
+        if (value is T typed)
+            return typed;
+
+        var heldType = value is null ? "null" : value.GetType().FullName ?? value.GetType().Name;
+        throw new InvalidOperationException(
+            $"PumpState: key '{key}' holds {heldType}; cannot satisfy Require<{typeof(T).Name}>.");
     }
 
     /// <summary>
@@ -51,5 +57,6 @@ public sealed class PumpState
     /// Mutations to the original or the snapshot do not affect each other.
     /// </summary>
     public IReadOnlyDictionary<string, object?> Snapshot() =>
-        new Dictionary<string, object?>(_data, StringComparer.OrdinalIgnoreCase);
+        new ReadOnlyDictionary<string, object?>(
+            new Dictionary<string, object?>(_data, StringComparer.OrdinalIgnoreCase));
 }
