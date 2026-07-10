@@ -93,6 +93,9 @@ internal interface IDbExecutor
     /// A row whose key set differs from the first row's fails fast with
     /// <see cref="InvalidOperationException"/> (rather than silently dropping columns).
     /// </param>
-    /// <exception cref="InvalidOperationException">A later row's key set differs from the first row's.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A later row's key set differs from the first row's, or a row value has a CLR type the
+    /// executor's bulk-insert path does not support (thrown by the PGSQL executor's binary COPY).
+    /// </exception>
     void BulkInsert(string table, IEnumerable<IDictionary<string, object?>> rows);
 }

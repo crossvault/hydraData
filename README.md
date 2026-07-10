@@ -6,9 +6,9 @@ HydraData is intended to be suitable for public GitHub use as an OSS project und
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Quickstart in English](docs/quickstart.en.md)
-- [Schnellstart auf Deutsch](docs/quickstart.de.md)
+- [Documentation index](https://github.com/crossvault/hydradata/blob/main/docs/README.md)
+- [Quickstart in English](https://github.com/crossvault/hydradata/blob/main/docs/quickstart.en.md)
+- [Schnellstart auf Deutsch](https://github.com/crossvault/hydradata/blob/main/docs/quickstart.de.md)
 
 The root README is intentionally short. Detailed setup, scripting, operations, and embedding guidance belongs under `docs/`.
 
@@ -113,4 +113,4 @@ See the public docs linked above for the full API surface, script conventions, a
 
 ## License
 
-HydraData is licensed under the MIT license. See [LICENSE.txt](LICENSE.txt).
+HydraData is licensed under the MIT license. See [LICENSE.txt](https://github.com/crossvault/hydradata/blob/main/LICENSE.txt).

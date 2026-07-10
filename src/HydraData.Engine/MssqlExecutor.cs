@@ -115,7 +115,7 @@ internal sealed class MssqlExecutor : DapperExecutor
     {
         if (row.Count != columns.Count || columns.Any(c => !row.ContainsKey(c)))
             throw new InvalidOperationException(
-                "BulkInsert: alle Zeilen müssen dieselben Spalten wie die erste Zeile haben " +
-                $"(erwartet: [{string.Join(", ", columns)}], erhalten: [{string.Join(", ", row.Keys)}]).");
+                "BulkInsert: every row must have the same columns as the first row " +
+                $"(expected: [{string.Join(", ", columns)}], received: [{string.Join(", ", row.Keys)}]).");
     }
 }

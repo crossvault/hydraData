@@ -9,7 +9,7 @@
     <Description>Embeddable, script-driven data pump engine for .NET 10 (HydraData).</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageProjectUrl>https://github.com/crossvault/hydradata</PackageProjectUrl>
+    <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
     <PackageTags>etl;data-pump;scripting;csv;excel;sql;postgresql;sqlserver;duckdb;roslyn;dotnet</PackageTags>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

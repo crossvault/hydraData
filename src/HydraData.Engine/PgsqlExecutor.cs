@@ -135,15 +135,16 @@ internal sealed class PgsqlExecutor : DapperExecutor
         DateTime => (NpgsqlDbType.Timestamp, value), // Unspecified: wall-clock, no tz.
         byte[] => (NpgsqlDbType.Bytea, value),
         _ => throw new InvalidOperationException(
-            $"BulkInsert: Spalte '{column}' hat einen nicht unterstützten CLR-Typ " +
-            $"'{value.GetType().Name}' für den Postgres-Binär-COPY."),
+            $"BulkInsert: column '{column}' has unsupported CLR type '{value.GetType().Name}' " +
+            "for the PostgreSQL binary COPY. Supported: int, long, short, decimal, double, float, " +
+            "bool, Guid, string, DateOnly, TimeOnly, DateTimeOffset, DateTime, byte[]."),
     };
 
     private static void EnsureSameKeys(List<string> columns, IDictionary<string, object?> row)
     {
         if (row.Count != columns.Count || columns.Any(c => !row.ContainsKey(c)))
             throw new InvalidOperationException(
-                "BulkInsert: alle Zeilen müssen dieselben Spalten wie die erste Zeile haben " +
-                $"(erwartet: [{string.Join(", ", columns)}], erhalten: [{string.Join(", ", row.Keys)}]).");
+                "BulkInsert: every row must have the same columns as the first row " +
+                $"(expected: [{string.Join(", ", columns)}], received: [{string.Join(", ", row.Keys)}]).");
     }
 }
