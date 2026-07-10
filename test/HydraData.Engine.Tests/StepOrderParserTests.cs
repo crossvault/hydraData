@@ -109,6 +109,19 @@ public class StepOrderParserTests
         Assert.Null(warning);
     }
 
+    [Fact]
+    public void Bracket_after_description_is_not_promoted_to_slug()
+    {
+        Assert.True(StepLoader.TryParseOrder(
+            "01_10_description_[kunden]", out var order, out var warning));
+
+        Assert.Equal(1, order.Group);
+        Assert.Equal(10, order.Step);
+        Assert.Null(order.SubStep);
+        Assert.Null(order.Slug);
+        Assert.Null(warning);
+    }
+
     // ── Numeric vs. lexicographic sort proof ─────────────────────────────────
 
     [Fact]

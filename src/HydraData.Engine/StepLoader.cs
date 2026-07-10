@@ -12,10 +12,11 @@ namespace HydraData.Engine;
 /// Filename format: <c>&lt;GG&gt;_&lt;SS&gt;[_&lt;TT&gt;][_[slug]]_description.cs</c>
 /// </para>
 /// <para>
-/// The parser extracts a bracketed slug from the full stem, then reads leading
-/// underscore-separated purely numeric segments until a non-numeric token
-/// (description start) is encountered. A period (<c>.</c>) separator is also
-/// recognised for compatibility but is not recommended for new scripts.
+/// The parser reads leading underscore-separated purely numeric segments. A bracketed
+/// slug is recognised only directly after GG, SS, and the optional TT segment; its contents
+/// may contain separators. Once a non-numeric description token begins, later brackets remain
+/// part of the description. A period (<c>.</c>) separator is also recognised for compatibility
+/// but is not recommended for new scripts.
 /// </para>
 /// </remarks>
 public sealed class StepLoader
@@ -109,13 +110,14 @@ public sealed class StepLoader
         order = null!;
         warning = null;
 
-        // Extract a bracketed slug from the whole stem before separator tokenization so a slug may
-        // itself contain '_' or '.'. Only the prefix before '[' participates in numeric parsing.
+        // Extract a bracketed slug before separator tokenization so a slug may itself contain '_' or '.'.
+        // The bracket is a slug boundary only when it directly follows the complete numeric prefix;
+        // brackets appearing after a description token remain part of the description.
         var numericPrefix = stem;
         var nums = new List<int>();
         string? slug = null;
         var openBracket = stem.IndexOf('[');
-        if (openBracket >= 0)
+        if (openBracket >= 0 && IsDirectSlugPosition(stem, openBracket))
         {
             numericPrefix = stem[..openBracket];
             var closeBracket = stem.IndexOf(']', openBracket + 1);
@@ -167,6 +169,33 @@ public sealed class StepLoader
 
         return true;
     }
+
+    private static bool IsDirectSlugPosition(string stem, int openBracket)
+    {
+        if (openBracket == 0 || !IsSeparator(stem[openBracket - 1]))
+            return false;
+
+        var prefixTokens = stem[..(openBracket - 1)].Split(new[] { '_', '.' });
+        var numericCount = 0;
+        foreach (var token in prefixTokens)
+        {
+            if (token.Length == 0)
+                continue;
+
+            if (numericCount >= 3
+                || !int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            {
+                return false;
+            }
+
+            numericCount++;
+        }
+
+        return numericCount >= 2;
+    }
+
+    private static bool IsSeparator(char value) =>
+        value is '_' or '.';
 
     private static StepMeta ReadMetaOrDefault(string path)
     {
