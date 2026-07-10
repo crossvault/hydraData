@@ -83,7 +83,7 @@ public sealed class ConnectionRegistry
         var duplicateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var declarationOrder = new List<ConnectionInfo>();
 
-        var elements = doc.Descendants("ConnectionString");
+        var elements = doc.Descendants("ConnectionString").ToList();
         foreach (var element in elements)
         {
             var name = RequireAttribute(element, "name");
@@ -108,6 +108,20 @@ public sealed class ConnectionRegistry
                 warnings.Add(new ConnectionRegistryWarning(
                     $"Doppelte Connection-Id '{info.Id}' (targetSystem|name, case-insensitiv); " +
                     "Auflösung wirft einen Fehler."));
+            }
+        }
+
+        if (elements.Count == 0)
+        {
+            var namespacedElement = doc.Descendants()
+                .FirstOrDefault(element =>
+                    element.Name.LocalName == "ConnectionString"
+                    && element.Name.Namespace != XNamespace.None);
+            if (namespacedElement is not null)
+            {
+                throw new FormatException(
+                    $"<ConnectionString> verwendet den unerwarteten XML-Namespace " +
+                    $"'{namespacedElement.Name.NamespaceName}'. Erwartet werden namespacelose Elemente.");
             }
         }
 

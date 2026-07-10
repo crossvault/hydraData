@@ -223,6 +223,25 @@ public class ConnectionRegistryTests
     }
 
     [Fact]
+    public void Namespaced_connection_elements_throw_clear_format_exception()
+    {
+        var xml = """
+            <ConnectionStrings xmlns="urn:hydradata:connections">
+              <ConnectionString targetSystem="MSSQL" name="stage">
+                <Parameters>
+                  <Parameter key="Server" value="db01" type="String" />
+                </Parameters>
+              </ConnectionString>
+            </ConnectionStrings>
+            """;
+
+        var ex = Assert.Throws<FormatException>(() => ConnectionRegistry.Parse(xml));
+
+        Assert.Contains("ConnectionString", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("urn:hydradata:connections", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Parameter_missing_key_throws()
     {
         var xml = """

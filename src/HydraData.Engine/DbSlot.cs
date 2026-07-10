@@ -17,13 +17,14 @@ internal sealed class DbSlot : IDbSlot
 {
     /// <summary>
     /// Default ADO.NET <c>Connect Timeout</c> (seconds) applied when the connection string does not
-    /// specify one, so a dead host fails fast rather than waiting out an unbounded provider default.
+    /// specify one, making the engine's fail-fast policy explicit instead of relying on provider defaults.
     /// </summary>
     internal const int DefaultConnectTimeoutSeconds = 15;
 
     private readonly ConnectionInfo _info;
     private readonly int? _commandTimeoutSeconds;
-    private IDbConnection? _connection;
+    private readonly IDbSlotConnectionFactory _connectionFactory;
+    private IDbSlotConnection? _connection;
     private IDbTransaction? _transaction;
     private IDbExecutor? _executor;
     private bool _disposed;
@@ -35,9 +36,18 @@ internal sealed class DbSlot : IDbSlot
     /// step plumbing. <see langword="null"/> leaves the provider default command timeout in place.
     /// </param>
     public DbSlot(ConnectionInfo info, int? commandTimeoutSeconds = null)
+        : this(info, commandTimeoutSeconds, ProviderDbSlotConnectionFactory.Instance)
+    {
+    }
+
+    internal DbSlot(
+        ConnectionInfo info,
+        int? commandTimeoutSeconds,
+        IDbSlotConnectionFactory connectionFactory)
     {
         _info = info;
         _commandTimeoutSeconds = commandTimeoutSeconds;
+        _connectionFactory = connectionFactory;
     }
 
     /// <inheritdoc />
@@ -54,6 +64,7 @@ internal sealed class DbSlot : IDbSlot
     /// <inheritdoc />
     public void Commit()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         // No transaction was started (no DB access happened): nothing to commit.
         _transaction?.Commit();
     }
@@ -61,6 +72,7 @@ internal sealed class DbSlot : IDbSlot
     /// <inheritdoc />
     public void Rollback()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         _transaction?.Rollback();
     }
 
@@ -78,41 +90,54 @@ internal sealed class DbSlot : IDbSlot
     {
         if (_executor is not null) return;
 
-        switch (_info.DbType)
+        var connectionString = _info.DbType switch
         {
-            case DbType.Mssql:
-                {
-                    var connection = new SqlConnection(WithMssqlConnectTimeout(_info.ConnectionString));
-                    OpenMssql(connection);
-                    var transaction = connection.BeginTransaction();
-                    _connection = connection;
-                    _transaction = transaction;
-                    _executor = new MssqlExecutor(connection, transaction, _commandTimeoutSeconds);
-                    break;
-                }
+            DbType.Mssql => WithMssqlConnectTimeout(_info.ConnectionString),
+            DbType.Pgsql => WithPgsqlCommandTimeout(
+                WithPgsqlConnectTimeout(_info.ConnectionString), _commandTimeoutSeconds),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(_info), _info.DbType, "Unknown DbType; cannot open slot."),
+        };
 
-            case DbType.Pgsql:
-                {
-                    var connection = new NpgsqlConnection(
-                        WithPgsqlCommandTimeout(WithPgsqlConnectTimeout(_info.ConnectionString)));
-                    connection.Open();
-                    SetPgsqlStatementTimeout(connection);
-                    var transaction = connection.BeginTransaction();
-                    _connection = connection;
-                    _transaction = transaction;
-                    _executor = new PgsqlExecutor(connection, transaction, _commandTimeoutSeconds);
-                    break;
-                }
+        var connection = _connectionFactory.Create(_info.DbType, connectionString);
+        try
+        {
+            if (_info.DbType == DbType.Mssql)
+                OpenMssql(connection);
+            else
+                connection.Open();
 
-            default:
-                throw new ArgumentOutOfRangeException(
-                    nameof(_info), _info.DbType, "Unknown DbType; cannot open slot.");
+            // Publish ownership immediately after a successful provider Open, before any session
+            // setup or transaction work that can throw.
+            _connection = connection;
+
+            if (_info.DbType == DbType.Pgsql
+                && _commandTimeoutSeconds is { } seconds
+                && seconds > 0)
+            {
+                connection.SetPgsqlStatementTimeout(PgsqlStatementTimeoutMilliseconds(seconds));
+            }
+
+            var transaction = connection.BeginTransaction();
+            _transaction = transaction;
+            _executor = connection.CreateExecutor(transaction, _commandTimeoutSeconds);
+        }
+        catch
+        {
+            // Open failures happen before the field assignment; later failures happen after it.
+            // Dispose the acquired resource in both cases, and clear partial state so a retry cannot
+            // retain a failed connection or transaction.
+            _transaction?.Dispose();
+            _transaction = null;
+            connection.Dispose();
+            _connection = null;
+            throw;
         }
     }
 
     // Opens the MSSQL connection, turning the cryptic TLS cert-chain SqlException (Encrypt=true default
     // against an on-prem server with a self-signed cert) into a clear, actionable hint.
-    private void OpenMssql(SqlConnection connection)
+    private void OpenMssql(IDbSlotConnection connection)
     {
         try
         {
@@ -167,25 +192,23 @@ internal sealed class DbSlot : IDbSlot
         nativeErrorCode is CertEUntrustedRoot or SecEUntrustedRoot or CertEChaining;
 
     // Sets an explicit Connect Timeout on the MSSQL string if the operator did not specify one.
-    private string WithMssqlConnectTimeout(string connectionString)
+    internal static string WithMssqlConnectTimeout(string connectionString)
     {
         var builder = new SqlConnectionStringBuilder(connectionString);
-        // SqlConnectionStringBuilder defaults ConnectTimeout to 15 and never reports "unset"; only
-        // override when the operator left it at the provider default, so an explicit value is respected.
-        if (!connectionString.Contains("Connect Timeout", StringComparison.OrdinalIgnoreCase)
-            && !connectionString.Contains("Connection Timeout", StringComparison.OrdinalIgnoreCase))
+        // ShouldSerialize detects whether the operator explicitly supplied any provider-recognised
+        // synonym (Connect Timeout, Connection Timeout or Timeout) without inspecting quoted values.
+        if (!builder.ShouldSerialize("Connect Timeout"))
             builder.ConnectTimeout = DefaultConnectTimeoutSeconds;
         return builder.ConnectionString;
     }
 
-    // Sets an explicit Timeout (Npgsql's connect timeout) if the operator did not specify one. The
-    // builder parses the string into canonical keys, so checking for the CONNECT-timeout key ("Timeout"
-    // / "Connect Timeout") via ContainsKey distinguishes it from "Command Timeout" — a plain
-    // Contains("Timeout") would also match CommandTimeout and wrongly suppress the connect default.
-    private string WithPgsqlConnectTimeout(string connectionString)
+    // Sets an explicit Timeout (Npgsql's connect timeout) if the operator did not specify one.
+    // ContainsKey cannot distinguish an unset known keyword from a supplied value in Npgsql;
+    // ShouldSerialize reports only values that were explicitly supplied or assigned.
+    internal static string WithPgsqlConnectTimeout(string connectionString)
     {
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!builder.ContainsKey("Timeout") && !builder.ContainsKey("Connect Timeout"))
+        if (!builder.ShouldSerialize("Timeout"))
             builder.Timeout = DefaultConnectTimeoutSeconds;
         return builder.ConnectionString;
     }
@@ -195,31 +218,102 @@ internal sealed class DbSlot : IDbSlot
     // NpgsqlBinaryImporter (binary COPY) is NOT bounded by this client-side timeout; COPY is bounded
     // server-side via SET statement_timeout set by SetPgsqlStatementTimeout (called after Open).
     // An operator-supplied CommandTimeout in the connection string is respected and not overridden.
-    private string WithPgsqlCommandTimeout(string connectionString)
+    internal static string WithPgsqlCommandTimeout(string connectionString, int? seconds)
     {
-        if (_commandTimeoutSeconds is not { } seconds) return connectionString;
+        if (seconds is not { } commandTimeoutSeconds) return connectionString;
 
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        if (!builder.ContainsKey("Command Timeout"))
-            builder.CommandTimeout = seconds;
+        if (!builder.ShouldSerialize("Command Timeout"))
+            builder.CommandTimeout = commandTimeoutSeconds;
         return builder.ConnectionString;
     }
 
-    // Sets the PostgreSQL server-side statement_timeout for this session. This is issued once right
-    // after Open() and bounds EVERY statement (including binary COPY) for the lifetime of the slot.
-    // statement_timeout is expressed in milliseconds; commandTimeoutSeconds * 1000 converts it.
-    // Only SET when a positive timeout is present — statement_timeout=0 disables it entirely, so
-    // omitting the SET (leaving the server default) is the correct behaviour when no timeout is
-    // configured. The ms value is a validated int formatted with InvariantCulture; SET statement_timeout
-    // does not accept a bound parameter, so the int is formatted directly — no SQL-injection risk.
-    private void SetPgsqlStatementTimeout(NpgsqlConnection connection)
-    {
-        if (_commandTimeoutSeconds is not { } seconds || seconds <= 0) return;
+    internal static long PgsqlStatementTimeoutMilliseconds(int seconds) => seconds * 1000L;
+}
 
-        var ms = seconds * 1000;
-        using var cmd = new NpgsqlCommand(
-            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"SET statement_timeout = {ms}"),
-            connection);
-        cmd.ExecuteNonQuery();
+/// <summary>Internal factory seam for provider connections owned by <see cref="DbSlot"/>.</summary>
+internal interface IDbSlotConnectionFactory
+{
+    IDbSlotConnection Create(DbType dbType, string connectionString);
+}
+
+/// <summary>
+/// Provider-neutral connection lifecycle used by <see cref="DbSlot"/>. Concrete adapters retain
+/// provider-specific executor construction without exposing a public test seam.
+/// </summary>
+internal interface IDbSlotConnection : IDisposable
+{
+    void Open();
+
+    void SetPgsqlStatementTimeout(long milliseconds);
+
+    IDbTransaction BeginTransaction();
+
+    IDbExecutor CreateExecutor(IDbTransaction transaction, int? commandTimeoutSeconds);
+}
+
+internal sealed class ProviderDbSlotConnectionFactory : IDbSlotConnectionFactory
+{
+    internal static ProviderDbSlotConnectionFactory Instance { get; } = new();
+
+    private ProviderDbSlotConnectionFactory()
+    {
+    }
+
+    public IDbSlotConnection Create(DbType dbType, string connectionString) => dbType switch
+    {
+        DbType.Mssql => new MssqlSlotConnection(connectionString),
+        DbType.Pgsql => new PgsqlSlotConnection(connectionString),
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(dbType), dbType, "Unknown DbType; cannot create connection."),
+    };
+
+    private sealed class MssqlSlotConnection(string connectionString) : IDbSlotConnection
+    {
+        private readonly SqlConnection _connection = new(connectionString);
+
+        public void Open() => _connection.Open();
+
+        public void SetPgsqlStatementTimeout(long milliseconds) =>
+            throw new InvalidOperationException("PostgreSQL statement timeout cannot be set on MSSQL.");
+
+        public IDbTransaction BeginTransaction() => _connection.BeginTransaction();
+
+        public IDbExecutor CreateExecutor(
+            IDbTransaction transaction, int? commandTimeoutSeconds) =>
+            new MssqlExecutor(
+                _connection,
+                (SqlTransaction)transaction,
+                commandTimeoutSeconds);
+
+        public void Dispose() => _connection.Dispose();
+    }
+
+    private sealed class PgsqlSlotConnection(string connectionString) : IDbSlotConnection
+    {
+        private readonly NpgsqlConnection _connection = new(connectionString);
+
+        public void Open() => _connection.Open();
+
+        public void SetPgsqlStatementTimeout(long milliseconds)
+        {
+            using var command = new NpgsqlCommand(
+                string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"SET statement_timeout = {milliseconds}"),
+                _connection);
+            command.ExecuteNonQuery();
+        }
+
+        public IDbTransaction BeginTransaction() => _connection.BeginTransaction();
+
+        public IDbExecutor CreateExecutor(
+            IDbTransaction transaction, int? commandTimeoutSeconds) =>
+            new PgsqlExecutor(
+                _connection,
+                (NpgsqlTransaction)transaction,
+                commandTimeoutSeconds);
+
+        public void Dispose() => _connection.Dispose();
     }
 }
